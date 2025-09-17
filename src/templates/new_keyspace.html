@@ -1,0 +1,114 @@
+<div class="p-3">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">
+      <i class="bi bi-plus-circle me-2"></i>Create New Keyspace
+    </h4>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="card-title mb-0">Keyspace Configuration</h6>
+        </div>
+        <div class="card-body" x-data="keyspaceForm()">
+          <form hx-post="/keyspaces/create" hx-target="#form-result" hx-indicator="#form-loading">
+            <div class="row mb-3">
+              <div class="col-md-6">
+                <label for="keyspace_name" class="form-label">Keyspace Name *</label>
+                <input type="text" class="form-control" id="keyspace_name" name="keyspace_name"
+                  pattern="[a-zA-Z][a-zA-Z0-9_]*"
+                  title="Must start with a letter, contain only letters, numbers, and underscores" required>
+                <div class="form-text">Must start with a letter and contain only letters, numbers, and underscores.
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label for="replication_strategy" class="form-label">Replication Strategy *</label>
+                <select class="form-select" id="replication_strategy" name="replication_strategy"
+                  x-model="replicationStrategy" required>
+                  <option value="">Select strategy...</option>
+                  <option value="SimpleStrategy">SimpleStrategy</option>
+                  <option value="NetworkTopologyStrategy">NetworkTopologyStrategy</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="replication-options">
+              <div x-show="replicationStrategy === 'SimpleStrategy'" class="mb-3">
+                <label for="replication_factor" class="form-label">Replication Factor *</label>
+                <input type="number" class="form-control" id="replication_factor" name="replication_factor" min="1"
+                  max="10" value="1">
+                <div class="form-text">Number of replicas for the keyspace</div>
+              </div>
+
+              <div x-show="replicationStrategy === 'NetworkTopologyStrategy'" class="mb-3">
+                <label class="form-label">Data Center Replication</label>
+                <div id="datacenter-replicas">
+                  <template x-for="(datacenter, index) in datacenters" :key="index">
+                    <div class="row datacenter-row mb-2">
+                      <div class="col-md-5">
+                        <input type="text" class="form-control" name="datacenter_name[]" x-model="datacenter.name"
+                          placeholder="Data Center Name">
+                      </div>
+                      <div class="col-md-3">
+                        <input type="number" class="form-control" name="datacenter_replicas[]"
+                          x-model="datacenter.replicas" placeholder="Replicas" min="1" max="10">
+                      </div>
+                      <div class="col-md-2">
+                        <button type="button" class="btn btn-outline-danger btn-sm" @click="removeDatacenter(index)"
+                          :disabled="datacenters.length === 1">
+                          <i class="bi bi-trash"></i>
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <button type="button" class="btn btn-outline-primary btn-sm" @click="addDatacenter()">
+                  <i class="bi bi-plus me-1"></i>Add Data Center
+                </button>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="durable_writes" name="durable_writes" checked>
+                <label class="form-check-label" for="durable_writes">
+                  Durable Writes
+                </label>
+                <div class="form-text">Enable durable writes</div>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-between">
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-circle me-1"></i>Create Keyspace
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="form-result" class="mt-4"></div>
+</div>
+</div>
+</div>
+<script>
+  function keyspaceForm() {
+    return {
+      replicationStrategy: '',
+      datacenters: [
+        { name: 'datacenter1', replicas: 3 }
+      ],
+      addDatacenter() {
+        this.datacenters.push({ name: '', replicas: 3 });
+      },
+      removeDatacenter(index) {
+        if (this.datacenters.length > 1) {
+          this.datacenters.splice(index, 1);
+        }
+      }
+    }
+  }
+</script>

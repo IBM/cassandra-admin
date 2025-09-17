@@ -1,0 +1,38 @@
+{%
+local ks_id = "ks-" .. keyspace:gsub("[^%w]", "-")
+local is_open = (keyspace == selected_keyspace)
+%}
+<li class="rounded {% if is_open then %} bg-body-secondary{% end %}">
+  <button class="btn btn-sm text-start w-100 border-0" data-bs-toggle="collapse" data-bs-target="#{{ks_id}}"
+    aria-expanded="{% if is_open then %}true{% else %}false{% end %}" aria-controls="{{ks_id}}"
+    style="font-weight:{% if is_open then %}bold{% else %}normal{% end %};">
+    <i class="bi bi-database-fill"></i> {{keyspace}}
+  </button>
+  <ul class="collapse list-unstyled small overflow-hidden {% if is_open then %} show{% end %}" style="white-space: nowrap;" id="{{ks_id}}">
+    {%
+    table.sort(tables)
+    for _, tbl in ipairs(tables) do
+    local active = (keyspace == selected_keyspace and tbl == selected_table)
+    local url = string.format("/view/%s/%s", ngx.escape_uri(keyspace), ngx.escape_uri(tbl))
+    %}
+    <li>
+      <a href="{{url}}" hx-get="{{url}}" hx-target="body" hx-push-url="true" hx-indicator="#nav-loading"
+        class="d-block ps-4 px-3 py-1 rounded {% if active then %} bg-dark text-white {% else %} text-dark {% end %}"
+        style="text-decoration:none;{% if active then %}font-weight:bold;{% end %}">
+        <i class="bi bi-table"></i> {{tbl}}
+      </a>
+    </li>
+    {% end %}
+    {% if type == 'user' and config.enable_add_table then %}
+    <li>
+      <a class="d-block ps-4 px-3 py-1 rounded {% if active then %} bg-dark text-white {% else %} text-muted {% end %}"
+        style="text-decoration:none;{% if active then %}font-weight:bold;{% end %}"
+        hx-get="/new/table/{{ngx.escape_uri(keyspace)}}" hx-target=".main-content" hx-push-url="true"
+        hx-indicator="#nav-loading">
+        <i class="bi bi-plus-circle"></i> Create Table
+      </a>
+    </li>
+    {% end %}
+  </ul>
+  <div class="border-top mx-2"></div>
+</li>

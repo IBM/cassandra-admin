@@ -1,0 +1,14 @@
+{% for _, row in ipairs(rows) do %}
+<tr>
+  {% for _, col_info in ipairs(columns) do %}
+  <td>
+    {% if col_info.type == "blob" then %}
+    <a class="text-decoration-none" href="data:application/octet-stream;base64,{{row[col_info.column_name]}}"
+      download="{{col_info.column_name}}.bin"><i class="bi bi-file-binary"></i> Binary Data</a>
+    {% else %}
+    {{row[col_info.column_name]}}
+    {% end %}
+  </td>
+  {% end %}
+</tr>
+{% end %}

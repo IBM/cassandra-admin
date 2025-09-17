@@ -1,0 +1,49 @@
+{% if not initialized then
+  return
+end %}
+<div class="card border-0 rounded-0" style="height: 100vh; overflow-y: auto; width: 15vw;">
+  <div class="card-header rounded-0 px-3 py-3 border-bottom d-flex justify-content-between align-items-center">
+    <h5 class="mb-0"><a href="/" class="text-decoration-none text-dark">{{ config.app_name }}</a></h5>
+    <div>
+        <button class="btn btn-sm btn-light text-decoration-none" title="Settings" data-bs-toggle="modal" data-bs-target="#connectionSettingsModal">
+          <i class="bi bi-gear-fill"></i>
+        </button>
+    </div>
+  </div>
+  <div class="card-body overflow-auto vh-100">
+    <div id="sidebar-content">
+      <ul class="list-unstyled mb-0">
+        {% if #user_keyspaces == 0 then %}
+        <div class="d-flex flex-column align-items-center justify-content-center py-5">
+          <i class="bi bi-database-x" style="font-size: 2rem; color: #bbb;"></i>
+          <div class="mt-3 mb-2 fw-bold text-muted">No user keyspaces found.</div>
+          <button class="btn btn-primary btn-sm mt-2" hx-get="/new/keyspace" hx-target=".main-content" hx-push-url="true" hx-indicator="#nav-loading">
+            Create Keyspace
+          </button>
+        </div>
+        {% else %}
+        <li class="text-body-tertiary px-2 pt-2 pb-1 small"><h6 class="small fw-bold text-uppercase">User Keyspaces</h6></li>
+          {% for _, ks in ipairs(user_keyspaces) do %}
+          {(sidebar_keyspace.html, { keyspace = ks, tables = keyspace_table_hierarchy[ks], selected_keyspace = selected_keyspace, selected_table = selected_table, type = 'user' })}
+          {% end %}
+          {% if config.enable_add_keyspace then %}
+          <li class="py-1 rounded">
+            <button class="btn btn-sm text-muted text-start w-100" hx-get="/new/keyspace" hx-target=".main-content"
+              hx-push-url="true" hx-indicator="#nav-loading">
+              <i class="bi bi-plus-circle"></i> Create Keyspace
+            </button>
+          </li>
+          {% end %}
+        {% end %}
+
+        {% if #system_keyspaces > 0 then %}
+        <li class="text-body-tertiary px-2 pt-2 pb-1 small"><h6 class="small fw-bold text-uppercase mt-4">System Keyspaces</h6></li>
+          {% for _, ks in ipairs(system_keyspaces) do %}
+          {(sidebar_keyspace.html, { keyspace = ks, tables = keyspace_table_hierarchy[ks], selected_keyspace = selected_keyspace, selected_table = selected_table, type = 'system' })}
+          {% end %}
+        {% end %}
+      </ul>
+    </div>
+  </div>
+  {% -- <div class="card-footer text-center small text-muted"><i class="bi bi-plug"></i> {{connection_metadata.host}}:{{connection_metadata.port}} (Protocol v{{connection_metadata.protocol_version}})</div> %}
+</div>

@@ -1,0 +1,315 @@
+<title>{{ page_title }}</title>
+<div class="p-3" x-data="cassandraTableForm()">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">
+      <i class="bi bi-plus-circle me-2"></i>Create New Table
+    </h4>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="card-title mb-0">Table Configuration</h5>
+        </div>
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Keyspace</label>
+              <input type="text" class="form-control" x-model="keyspace" placeholder="my_keyspace">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Table Name</label>
+              <input type="text" class="form-control" x-model="tableName" placeholder="my_table">
+            </div>
+          </div>
+
+          <div class="mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h6 class="mb-0">Columns</h6>
+              <button type="button" class="btn btn-sm btn-primary" @click="addColumn()">
+                Add Column
+              </button>
+            </div>
+
+            <div class="row g-2 mb-2 small text-muted">
+              <div class="col-3">Column Name</div>
+              <div class="col-2">Data Type</div>
+              <div class="col-2">Partition Key</div>
+              <div class="col-2">Clustering Key</div>
+              <div class="col-2">Order</div>
+              <div class="col-1">Actions</div>
+            </div>
+
+            <template x-for="(column, index) in columns" :key="index">
+              <div class="row g-2 mb-2 align-items-center">
+                <div class="col-3">
+                  <input type="text" class="form-control form-control-sm" x-model="column.name"
+                    placeholder="column_name">
+                </div>
+                <div class="col-2">
+                  <select class="form-select form-select-sm" x-model="column.type">
+                    <option value="">Select type</option>
+                    <option value="text">text</option>
+                    <option value="varchar">varchar</option>
+                    <option value="int">int</option>
+                    <option value="bigint">bigint</option>
+                    <option value="uuid">uuid</option>
+                    <option value="timeuuid">timeuuid</option>
+                    <option value="timestamp">timestamp</option>
+                    <option value="date">date</option>
+                    <option value="time">time</option>
+                    <option value="boolean">boolean</option>
+                    <option value="float">float</option>
+                    <option value="double">double</option>
+                    <option value="decimal">decimal</option>
+                    <option value="blob">blob</option>
+                    <option value="inet">inet</option>
+                    <option value="counter">counter</option>
+                  </select>
+                </div>
+                <div class="col-2">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" x-model="column.isPartitionKey"
+                      @change="if (column.isPartitionKey) column.isClusteringKey = false" :id="'partition_' + index">
+                  </div>
+                </div>
+                <div class="col-2">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" x-model="column.isClusteringKey"
+                      @change="if (column.isClusteringKey) column.isPartitionKey = false" :id="'clustering_' + index">
+                  </div>
+                </div>
+                <div class="col-2">
+                  <select class="form-select form-select-sm" x-model="column.order" :disabled="!column.isClusteringKey">
+                    <option value="ASC">ASC</option>
+                    <option value="DESC">DESC</option>
+                  </select>
+                </div>
+                <div class="col-1">
+                  <button type="button" class="btn btn-sm btn-outline-danger" @click="removeColumn(index)"
+                    :disabled="columns.length <= 1">
+                    ×
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="mb-3">
+            <h6 class="mb-2">Table Options</h6>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label small">Comment</label>
+                <input type="text" class="form-control form-control-sm" x-model="options.comment"
+                  placeholder="Table description">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small">Compaction Strategy</label>
+                <select class="form-select form-select-sm" x-model="options.compactionStrategy">
+                  <option value="">Default</option>
+                  <option value="SizeTieredCompactionStrategy">Size Tiered</option>
+                  <option value="LeveledCompactionStrategy">Leveled</option>
+                  <option value="TimeWindowCompactionStrategy">Time Window</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-success" @click="generateCQL()" :disabled="!isValid">
+              Generate CQL
+            </button>
+            <button type="button" class="btn btn-secondary" @click="resetForm()">
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="card-title mb-0">CQL Preview</h5>
+        </div>
+        <div class="card-body">
+          <pre class="bg-dark text-light p-3 rounded"
+            style="font-size: 0.9em; min-height: 300px;"><code x-text="cqlPreview"></code></pre>
+
+          <div class="mt-3" x-show="cqlPreview.trim()">
+            <button type="button" class="btn btn-outline-primary btn-sm" @click="copyCQL()">
+              Copy to Clipboard
+            </button>
+            <small class="text-success ms-2" x-show="copySuccess" x-transition>
+              Copied!
+            </small>
+          </div>
+
+          <div x-show="!isValid && (keyspace || tableName || columns.some(c => c.name))">
+            <div class="alert alert-warning mt-3">
+              <small>
+                <strong>Issues:</strong>
+                <ul class="mb-0 mt-1">
+                  <li x-show="!keyspace">Keyspace name is required</li>
+                  <li x-show="!tableName">Table name is required</li>
+                  <li x-show="!hasValidColumns">At least one valid column is required</li>
+                  <li x-show="!hasPartitionKey">At least one partition key is required</li>
+                  <li x-show="hasConflictingKeys">Columns cannot be both partition key and clustering key</li>
+                </ul>
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function cassandraTableForm() {
+    return {
+      keyspace: '',
+      tableName: '',
+      columns: [
+        { name: '', type: '', isPartitionKey: false, isClusteringKey: false, order: 'ASC' }
+      ],
+      options: {
+        comment: '',
+        compactionStrategy: ''
+      },
+      copySuccess: false,
+
+      get isValid() {
+        return this.keyspace.trim() &&
+          this.tableName.trim() &&
+          this.hasValidColumns &&
+          this.hasPartitionKey &&
+          !this.hasConflictingKeys;
+      },
+
+      get hasValidColumns() {
+        return this.columns.some(col => col.name.trim() && col.type);
+      },
+
+      get hasPartitionKey() {
+        return this.columns.some(col => col.isPartitionKey && col.name.trim() && col.type);
+      },
+
+      get hasConflictingKeys() {
+        return this.columns.some(col => col.isPartitionKey && col.isClusteringKey);
+      },
+
+      get primaryKeyColumns() {
+        return this.columns.filter(col => (col.isPartitionKey || col.isClusteringKey) && col.name.trim() && col.type);
+      },
+
+      get cqlPreview() {
+        if (!this.isValid) {
+          return '-- Enter keyspace, table name, and at least one partition key column to see CQL preview';
+        }
+
+        let cql = `CREATE TABLE ${this.keyspace}.${this.tableName} (\n`;
+
+        // Add columns
+        const validColumns = this.columns.filter(col => col.name.trim() && col.type);
+        validColumns.forEach((col, index) => {
+          cql += `    ${col.name} ${col.type}`;
+          cql += ',';
+          cql += '\n';
+        });
+
+        // Add primary key
+        const partitionKeys = validColumns.filter(col => col.isPartitionKey);
+        const clusteringKeys = validColumns.filter(col => col.isClusteringKey);
+
+        if (partitionKeys.length > 0) {
+          cql += '    PRIMARY KEY (';
+          if (partitionKeys.length === 1 && clusteringKeys.length === 0) {
+            cql += partitionKeys[0].name;
+          } else {
+            if (partitionKeys.length === 1) {
+              cql += partitionKeys[0].name;
+            } else {
+              cql += '(' + partitionKeys.map(col => col.name).join(', ') + ')';
+            }
+            if (clusteringKeys.length > 0) {
+              cql += ', ' + clusteringKeys.map(col => col.name).join(', ');
+            }
+          }
+          cql += ')\n';
+        }
+
+        cql += ')';
+
+        // Add clustering order if any primary key columns have non-default ordering
+        if (clusteringKeys.length > 0) {
+          cql += '\nWITH CLUSTERING ORDER BY (';
+          // Include all primary key columns in order, but only specify non-ASC ones
+          cql += clusteringKeys.map(col => `${col.name} ${col.order}`).join(', ');
+          cql += ')';
+        }
+
+        // Add other options
+        const optionsArray = [];
+        if (this.options.comment.trim()) {
+          optionsArray.push(`comment = '${this.options.comment.trim()}'`);
+        }
+        if (this.options.compactionStrategy) {
+          optionsArray.push(`compaction = {'class': '${this.options.compactionStrategy}'}`);
+        }
+
+        if (optionsArray.length > 0) {
+          const withClause = primaryKeysWithOrder.length > 0 ? '\nAND ' : '\nWITH ';
+          cql += withClause + optionsArray.join('\nAND ');
+        }
+
+        cql += ';';
+        return cql;
+      },
+
+      addColumn() {
+        this.columns.push({
+          name: '',
+          type: '',
+          isPartitionKey: false,
+          isClusteringKey: false,
+          order: 'ASC'
+        });
+      },
+
+      removeColumn(index) {
+        if (this.columns.length > 1) {
+          this.columns.splice(index, 1);
+        }
+      },
+
+      generateCQL() {
+        // This could trigger additional actions like validation or formatting
+        console.log('Generated CQL:', this.cqlPreview);
+      },
+
+      async copyCQL() {
+        try {
+          await navigator.clipboard.writeText(this.cqlPreview);
+          this.copySuccess = true;
+          setTimeout(() => this.copySuccess = false, 2000);
+        } catch (err) {
+          console.error('Failed to copy:', err);
+        }
+      },
+
+      resetForm() {
+        this.keyspace = '';
+        this.tableName = '';
+        this.columns = [
+          { name: '', type: '', isPartitionKey: false, isClusteringKey: false, order: 'ASC' }
+        ];
+        this.options = {
+          comment: '',
+          compactionStrategy: ''
+        };
+      }
+    }
+  }
+</script>
