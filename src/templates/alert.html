@@ -1,0 +1,18 @@
+<div class="alert alert-{{alert_type}}" role="alert">
+    {% if alert_type == "success" then %}
+        <i class="bi bi-check-circle-fill"></i>
+    {% elseif alert_type == "danger" then %}
+        <i class="bi bi-exclamation-triangle-fill"></i>
+    {% elseif alert_type == "warning" then %}
+        <i class="bi bi-exclamation-circle-fill"></i>
+    {% elseif alert_type == "info" then %}
+        <i class="bi bi-info-circle-fill"></i>
+    {% else %}
+        <i class="bi bi-bell-fill"></i>
+    {% end %}
+    <strong>{{ alert_title or alert_type }}</strong> {{ alert_message }}
+    {% if alert_details and alert_details ~= "" then %}
+    <hr>
+    <small class="font-monospace">{{ alert_details }}</small>
+    {% end %}
+</div>

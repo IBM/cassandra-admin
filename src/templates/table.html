@@ -1,0 +1,73 @@
+<form class="d-flex shadow-sm z-2 border-start px-3 py-3" hx-post="/query" hx-target=".main-content" hx-swap="innerHTML">
+  <div class="col me-3">
+    <input type="text" name="current_query" class="form-control form-control-sm font-monospace" placeholder="Enter CQL query..." value="{{current_query or ''}}">
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-sm btn-dark" title="Run Query" type="submit"><i class="bi bi bi-arrow-right-circle"></i></button>
+  </div>
+</form>
+{% if error_message then %}
+  <div class="m-3">
+    {(alert.html, { alert_type = "danger", alert_message = error_message, alert_title = "Error" })}
+  </div>
+</div>
+{% else %}
+  <div class="d-flex flex-column">
+    <div class="table-responsive" style="height: calc(100vh - 101px); overflow: auto; max-width: 85vw;">
+      <table class="table table-bordered table-hover mb-0">
+        <thead class="table-light text-nowrap">
+          <tr>
+            {% if columns then %}
+            {% for _, col_info in ipairs(columns) do %}
+            <th>
+              {% if col_info.kind == 'partition_key' then %}
+              <i class="bi bi-key-fill d-inline-block" title="Partition Key" style="transform: rotate(-225deg);"></i>
+              {% end %}
+              {% if col_info.kind == 'clustering' then %}
+              <i class="bi bi-key d-inline-block" title="Clustering Key" style="transform: rotate(-225deg);"></i>
+              {% end %}
+              {{col_info.column_name}}
+              <span class="badge bg-secondary text-white user-select-none ms-1 small">{{col_info.type}}</span>
+            </th>
+            {% end %}
+            {% else %}
+            <th>Error Loading Schema</th>
+            {% end %}
+          </tr>
+        </thead>
+        {% if static_data then %}
+        <tbody class="font-monospace" style="white-space: nowrap;">
+          {(table_rows.html)}
+        </tbody>
+        {% else %}
+        <tbody id="table-body" hx-get="/view/{{keyspace_name}}/{{table_name}}?limit=50" hx-trigger="load" hx-swap="innerHTML" class="font-monospace" style="white-space: nowrap;" hx-indicator="#nav-loading">
+          <!-- Rows -->
+        </tbody>
+        {% end %}
+      </table>
+    </div>
+    {% if row_count == 0 then %}
+    <div class="opacity-50">
+    {(centered_message.html, { icon = "bi-inbox", title = "No rows to show" })}
+    </div>
+    {% end %}
+    <div class="align-items-center bg-body-tertiary d-flex justify-content-between px-2 py-1 border-top">
+      <div class="col-auto">
+          {{ row_count or 0 }} Rows
+      </div>
+      {% if row_count and row_count > 0 then %}
+      <div id="end-of-data" class="col-1 ms-auto text-center" style="display: none;">
+        <i class="bi bi-check-circle-fill"></i> Loaded all rows
+      </div>
+      {% end %}
+      <div class="col-auto text-end">
+        <label for="limit-select" class="form-label mb-0 me-2">Rows per page:</label>
+        <select id="limit-select" class="form-select form-select-sm d-inline-block w-auto" style="min-width: 80px;">
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+    </div>
+  </div>
+{% end %}

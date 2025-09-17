@@ -1,0 +1,34 @@
+{% if not connection_metadata then
+  return
+end %}
+<div class="modal fade" id="connectionSettingsModal" tabindex="-1" aria-labelledby="connectionSettingsModalLabel"
+  aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header small">
+        <h5 class="modal-title" id="connectionSettingsModalLabel">Connection Information</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h6 class="small">Client Info:</h6>
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item small"><strong>Host:</strong> {{connection_metadata.host}}</li>
+          <li class="list-group-item small"><strong>Port:</strong> {{connection_metadata.port}}</li>
+          <li class="list-group-item small"><strong>Binary Protocol Version:</strong> {{connection_metadata.protocol_version}}</li>
+          <li class="list-group-item small"><strong>Client Version:</strong> {{connection_metadata.client_version}}</li>
+        </ul>
+        <hr>
+        <h6 class="small">System Info:</h6>
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item small"><strong>Cluster Name:</strong> {{connection_metadata.system_local_info.cluster_name}}</li>
+          <li class="list-group-item small"><strong>CQL Version:</strong> {{connection_metadata.system_local_info.cql_version}}</li>
+          <li class="list-group-item small"><strong>Data Center:</strong> {{connection_metadata.system_local_info.data_center}}</li>
+          <li class="list-group-item small"><strong>Release Version:</strong> {{connection_metadata.system_local_info.release_version}}</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
