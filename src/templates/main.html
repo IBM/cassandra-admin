@@ -1,0 +1,593 @@
+{% local function interstitial(icon, text) return [[<div class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100"><i class="bi bi ]] .. icon .. [[ fs-1 mb-3 text-secondary"></i><h4 class="text-secondary text-center user-select-none">]] .. text .. [[</h4></div>]] end %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>{{ config.app_name }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>[x-cloak] { display: none !important; }</style>
+</head>
+<body>
+  <div x-data="main()">
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 11000;">
+      <template x-for="toast in visibleToasts" :key="toast.id">
+        <div class="toast show" role="alert" aria-live="assertive" aria-atomic="true">
+          <div class="toast-header" :class="toast.type === 'error' ? 'bg-danger text-white' : toast.type === 'success' ? 'bg-success text-white' : 'bg-info text-white'">
+            <i class="bi me-2" :class="toast.type === 'error' ? 'bi-exclamation-circle-fill' : toast.type === 'success' ? 'bi-check-circle-fill' : 'bi-info-circle-fill'"></i>
+            <strong class="me-auto" x-text="toast.title"></strong>
+            <button type="button" class="btn-close" :class="toast.type === 'error' || toast.type === 'success' ? 'btn-close-white' : ''" @click="removeToast(toast.id)" aria-label="Close"></button>
+          </div>
+          <div class="toast-body" x-text="toast.message"></div>
+        </div>
+      </template>
+    </div>
+
+    <template x-if="schemaError">
+      {* interstitial("bi-exclamation-triangle-fill", "Could not fetch Cassandra schema<br>Please check your connection settings") *}
+    </template>
+    <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }" style="height: 100vh;">
+      <nav class="col-lg-2 col-md-3 d-md-block h-100 overflow-auto sidebar position-relative border-end vh-100">
+        <h5 class="p-3 bg-light border-bottom position-sticky top-0 z-2 mb-0">
+          <a href="/" @click.prevent="goHome()" class="text-decoration-none text-dark">Cassandra Admin</a>
+        </h5>
+        <div x-show="loading" class="text-center position-absolute start-50 top-50 translate-middle">
+          <div class="spinner-border spinner-border-sm" role="status"></div>
+          <span class="ms-2">Loading schema...</span>
+        </div>
+
+        <div class="text-nowrap" x-show="!loading">
+          <template x-for="ks in schema" :key="ks.keyspace">
+              <div class="px-3 border-bottom border-light-subtle" 
+                  :class="{ 'bg-body-secondary': selected.keyspace === ks.keyspace }"
+                  x-data="{ showKeyspaceActions: false, keyspaceDropdownOpen: false }"
+                  @mouseenter="showKeyspaceActions = true"
+                  @mouseleave="if (!keyspaceDropdownOpen) showKeyspaceActions = false">
+                <div class="d-flex align-items-center">
+                  <button class="d-flex flex-fill btn btn-sm text-start w-100 border-0" 
+                          data-bs-toggle="collapse"
+                          :data-bs-target="'#collapse-' + ks.keyspace"
+                          :class="{ 'fw-bold': selected.keyspace === ks.keyspace }"
+                          :aria-expanded="selected.keyspace === ks.keyspace ? 'true' : 'false'">
+                    <i class="bi bi-database-fill pe-1"></i>
+                    <span class="text-truncate" x-text="ks.keyspace" :title="ks.keyspace"></span>
+                  </button>
+
+                  <div class="dropdown ms-auto" style="flex-shrink: 0;" x-show="showKeyspaceActions || (selected.keyspace === ks.keyspace)" x-cloak>
+                    <a href="#" class="text-decoration-none text-center px-2" style="width: 30px; color: inherit;"  data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="keyspaceDropdownOpen = true" @click.outside="keyspaceDropdownOpen = false; showKeyspaceActions = false">
+                      <i class="bi bi-three-dots"></i>
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
+                      <li>
+                        <a class="dropdown-item small text-danger" href="javascript:void(0)" @click.prevent="dropKeyspace(ks.keyspace)">
+                          <i class="bi bi-trash me-2"></i>Drop Keyspace
+                        </a>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              <ul class="list-unstyled small collapse mb-1" :id="'collapse-' + ks.keyspace"
+                :class="{ 'show': selected.keyspace === ks.keyspace }">
+                <template x-for="entity in ks.entities" :key="entity.type + '-' + entity.name">
+                  <li class="nav-item d-flex rounded align-items-center position-relative" 
+                  :class="{ 'bg-black text-white': selected.keyspace === ks.keyspace && selected.entity === entity.name }"
+                  x-data="{ showEntityActions: false, entityDropdownOpen: false }"
+                  @mouseenter="showEntityActions = true"
+                  @mouseleave="if (!entityDropdownOpen) showEntityActions = false"
+                  >
+                    <a 
+                      :href="'/' + entity.type + '/' + ks.keyspace + '/' + entity.name"
+                      @click.prevent="loadEntity(ks.keyspace, entity.name, entity.type)"
+                      class="d-flex flex-fill ps-4 py-1 text-decoration-none overflow-hidden text-nowrap"
+                      style="color: inherit;">
+                      <i class="bi pe-1" :class="entity.type === 'table' ? 'bi-table' : entity.type === 'view' ? 'bi-eye' : 'bi-diagram-3'" class="pe-1"></i>
+                      <span class="text-truncate" x-text="entity.name" :title="entity.name"></span>
+                    </a>
+                    
+                    <!-- Quick Actions Dropdown -->
+                    <div class="dropdown" style="flex-shrink: 0;" x-show="showEntityActions || (selected.keyspace === ks.keyspace && selected.entity === entity.name)" x-cloak>
+                      <a href="javascript:void(0)" class="text-decoration-none text-center px-3" style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="entityDropdownOpen = true" @click.outside="entityDropdownOpen = false; showEntityActions = false"> 
+                        <i class="bi bi-three-dots"></i>
+                      </a>
+                      <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
+                        <li>
+                          <a class="dropdown-item small" href="javascript:void()" @click.prevent="exportEntity(ks.keyspace, entity.name, entity.type)">
+                            <i class="bi bi-download me-2"></i>Export</span>
+                          </a>
+                        </li>
+                        <li>
+                          <a class="dropdown-item small" href="javascript:void(0)" @click.prevent="truncateEntity(ks.keyspace, entity.name, entity.type)">
+                            <i class="bi bi-scissors me-2"></i>Truncate
+                          </a>
+                        </li>
+                        <li><hr class="dropdown-divider my-1"></li>
+                        <li>
+                          <a class="dropdown-item small text-danger" href="javascript:void(0)" @click.prevent="dropEntity(ks.keyspace, entity.name, entity.type)">
+                            <i class="bi bi-trash me-2"></i>Drop <span x-text="entity.type.charAt(0).toUpperCase() + entity.type.slice(1)"></span>
+                          </a>
+                        </li>
+                      </ul>
+                    </div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </template>
+        </div>
+      </nav>
+      <!-- Main Content -->
+      <main class="col-md-9 ms-sm-auto col-lg-10 overflow-auto vh-100 shadow position-relative">
+        <div x-show="entityLoading" class="bg-white p-5 position-absolute rounded start-50 text-center top-50 translate-middle" style="z-index: 9999;">
+          <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+          <span class="ms-2 text-muted small" x-text="selected.entity ? 'Loading ' + selected.entityType + ' ' + selected.entity + '...' : 'Loading...'"></span>
+        </div>
+        <div x-show="!entityLoading && entityData">
+          <template x-if="entityData && entityData.columns && entityData.columns.length > 0">
+            <div class="d-flex flex-column vh-100" style="font-size: 12px;">
+              <div class="table-responsive flex-fill overflow-y-auto">
+                <table class="table table-striped table-hover table-bordered text-nowrap" style="margin-left: -1px;">
+                  <thead class="table-light text-nowrap">
+                    <tr>
+                      <template x-for="col in entityData.columns" :key="col.column_name">
+                        <th>
+                          <template x-if="col.kind === 'partition_key'">
+                            <i class="bi bi-key-fill d-inline-block" title="Partition Key" style="transform: rotate(-225deg);"></i>
+                          </template>
+                          <template x-if="col.kind === 'clustering'">
+                            <i class="bi bi-key d-inline-block" title="Clustering Key" style="transform: rotate(-225deg);"></i>
+                          </template>
+                          <span x-text="col.column_name"></span>
+                          <small class="badge bg-secondary text-white user-select-none ms-1 small" x-text="col.type"></small>
+                        </th>
+                      </template>
+                    </tr>
+                  </thead>
+                  <tbody class="font-monospace">
+                    <template x-if="entityData.rows && entityData.rows.length > 0">
+                      <template x-for="(row, idx) in entityData.rows" :key="idx">
+                        <tr>
+                          <template x-for="col in entityData.columns" :key="col.column_name">
+                            <td x-text="row[col.column_name] !== undefined && row[col.column_name] !== null ? row[col.column_name] : ''">
+                            </td>
+                          </template>
+                        </tr>
+                      </template>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <template x-if="!entityData.rows || entityData.rows.length === 0">
+                {* interstitial("bi-inbox", "No rows to show") *}
+              </template>
+              <!-- Pagination Footer -->
+              <div class="bottom-0 start-0 bg-body-tertiary w-100 p-2 border-top d-flex flex-shrink-0 justify-content-between align-items-center">
+                <div>
+                  Showing <span x-text="entityData.rows ? entityData.rows.length : 0"></span> rows
+                  <span x-show="pagination.currentPage > 1" x-text="' (Page ' + pagination.currentPage + ')'"></span>
+                </div>
+                <div class="d-flex gap-2 align-items-center">
+                  <select class="form-select form-select-sm" style="width: auto;" x-model="pageSize" @change="changePageSize()">
+                    {% for _, size in ipairs(config.page_sizes) do %}
+                      <option value="{{ size }}">{{ size }} rows</option>
+                    {% end %}
+                  </select>
+                  <div class="btn-group btn-group-sm" role="group">
+                    <button 
+                      type="button" 
+                      class="btn btn-outline-secondary" 
+                      @click="previousPage()"
+                      :disabled="!canGoPrevious()"
+                      :class="{ 'disabled': !canGoPrevious() }">
+                      <i class="bi bi-chevron-left"></i> Previous
+                    </button>
+                    <button 
+                      type="button" 
+                      class="btn btn-outline-secondary" 
+                      @click="nextPage()"
+                      :disabled="!canGoNext()"
+                      :class="{ 'disabled': !canGoNext() }">
+                      Next <i class="bi bi-chevron-right"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <template x-if="!entityData && !entityLoading">
+          {* interstitial("bi-database-fill", "Select a table, view, or materialized view from the sidebar") *}
+        </template>
+      </main>
+    </div>
+
+
+
+    <!-- Modals -->
+    <div class="modal" id="truncate_modal" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content small">
+          <div class="modal-body">
+            <p>Are you sure you want to truncate <strong x-text="modalData.keyspace + '.' + modalData.entity"></strong>?</p>
+            <p class="text-danger mb-0">This will permanently delete all data.</p>
+          </div>
+          <div class="modal-footer p-1">
+            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-sm btn-danger" @click="executeTruncate()">Truncate</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  <div class="modal" id="drop_entity_modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content small">
+        <div class="modal-body">
+          <p>Are you sure you want to drop <strong x-text="modalData.keyspace + '.' + modalData.entity"></strong>?</p>
+          <p class="text-danger mb-0">This will permanently delete the <span x-text="modalData.entityType"></span> and all its data.</p>
+        </div>
+        <div class="modal-footer p-1">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-sm btn-danger" @click="executeDropEntity()">Drop <span x-text="modalData.entityType ? modalData.entityType.charAt(0).toUpperCase() + modalData.entityType.slice(1) : ''"></span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="export_modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content small">
+        <form id="exportForm" method="POST" target="_blank">
+          <div class="modal-body">
+            <p>Export <span x-text="modalData.entityType ? modalData.entityType : ''"></span> <strong x-text="modalData.keyspace + '.' + modalData.entity"></strong> as:</p>
+            <div class="mb-3">
+              <label for="exportFormat" class="form-label">Format</label>
+              <select id="exportFormat" name="format" class="form-select form-select-sm" x-model="format">
+                <option value="cql" x-show="modalData.entityType === 'table'">CQL</option>
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="exportLimit" class="form-label">Row Limit (0 for all)</label>
+              <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm" value="0" min="0">
+            </div>
+            <div class="form-check" x-show="format === 'cql'">
+              <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL" checked>
+              <label class="form-check-label" for="includeDDL">
+                Include 'CREATE' statement
+              </label>
+            </div>
+          </div>
+          <div class="modal-footer p-1">
+            <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-sm btn-primary">Export</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="drop_keyspace_modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content small">
+        <div class="modal-body">
+          <p>Are you sure you want to drop keyspace <strong x-text="modalData.keyspace"></strong>?</p>
+          <p class="text-danger mb-0">This will permanently delete the keyspace and all its tables and data.</p>
+        </div>
+        <div class="modal-footer p-1">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-sm btn-danger" @click="executeDropKeyspace()">Drop Keyspace</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script>
+    function main() {
+      return {
+        schema: [],
+        entityData: null,
+        selected: { keyspace: null, entity: null, entityType: null },
+        loading: true,
+        entityLoading: false,
+        modalData: { keyspace: null, entity: null, entityType: null },
+        pageSize: {{ config.default_page_size }},
+        schemaError: null,
+        toasts: [],
+        visibleToasts: [],
+        pagination: {
+          currentPage: 1,
+          pagingStates: [],
+          hasMorePages: false
+        },
+
+        showToast(title, message, type = 'info', duration = 5000) {
+          const id = Date.now();
+          const toast = { id, title, message, type };
+          this.toasts.push(toast);
+          this.fireToast(id, duration);
+        },
+
+        fireToast(id, duration) {
+          this.visibleToasts.push(this.toasts.find(toast => toast.id === id));
+          setTimeout(() => {
+            this.removeToast(id);
+          }, duration);
+        },
+
+        removeToast(id) {
+          const toast = this.visibleToasts.find(toast => toast.id === id);
+          const index = this.visibleToasts.indexOf(toast);
+          if (index !== -1) {
+            this.visibleToasts.splice(index, 1);
+          }
+        },
+
+        handleError(context, error, showToastNotification = true) {
+          const errorMessage = error.message || error.error || error.toString();
+          console.error(`[${context}]`, error);
+          
+          if (showToastNotification) {
+            this.showToast('Error', `${errorMessage}`, 'error');
+          }
+        },
+
+        handleSuccess(context, message) {
+          this.showToast('Success', `${message}`, 'success');
+        },
+
+        async loadSchema() {
+          try {
+            const response = await fetch('/api/schema');
+            const data = await response.json();
+            
+            if (data.error) {
+              this.schemaError = data.error;
+              this.handleError('Schema Load', data);
+            } else {
+              this.schema = data;
+              this.schemaError = null;
+            }
+          } catch (error) {
+            this.schemaError = 'Failed to connect to the server. Please try again later.';
+            this.handleError('Schema Load', error);
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async loadEntity(keyspace, entity, entityType, resetPagination = true) {
+          this.selected = { keyspace, entity, entityType };
+          this.entityLoading = true;
+
+          if (resetPagination) {
+            this.resetPagination();
+          }
+
+          window.history.pushState(
+            { keyspace, entity, entityType },
+            '',
+            `/${entityType}/${keyspace}/${entity}`
+          );
+
+          try {
+            const currentPagingState = this.getCurrentPagingState();
+            const url = new URL(`/api/${entityType}/${keyspace}/${entity}`, window.location.origin);
+            url.searchParams.append('page_size', this.pageSize);
+            if (currentPagingState) {
+              url.searchParams.append('paging_state', currentPagingState);
+            }
+
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.error) {
+              this.handleError('Load', data);
+              return;
+            }
+            
+            this.entityData = data;
+            this.pagination.hasMorePages = data.has_more_pages || false;
+            
+            if (data.paging_state && data.has_more_pages) {
+              this.storeNextPagingState(data.paging_state);
+            }
+          } catch (error) {
+            this.handleError('Load', error);
+          } finally {
+            this.entityLoading = false;
+          }
+        },
+
+        resetPagination() {
+          this.pagination = {
+            currentPage: 1,
+            pagingStates: [],
+            hasMorePages: false
+          };
+        },
+
+        getCurrentPagingState() {
+          if (this.pagination.currentPage === 1) {
+            return null;
+          }
+          return this.pagination.pagingStates[this.pagination.currentPage - 2] || null;
+        },
+
+        storeNextPagingState(pagingState) {
+          const index = this.pagination.currentPage - 1;
+          if (this.pagination.pagingStates[index] !== pagingState) {
+            this.pagination.pagingStates[index] = pagingState;
+          }
+        },
+
+        canGoPrevious() {
+          return this.pagination.currentPage > 1;
+        },
+
+        canGoNext() {
+          return this.pagination.hasMorePages;
+        },
+
+        async previousPage() {
+          if (!this.canGoPrevious()) return;
+          
+          this.pagination.currentPage--;
+          await this.loadEntity(this.selected.keyspace, this.selected.entity, this.selected.entityType, false);
+        },
+
+        async nextPage() {
+          if (!this.canGoNext()) return;
+          
+          this.pagination.currentPage++;
+          await this.loadEntity(this.selected.keyspace, this.selected.entity, this.selected.entityType, false);
+        },
+
+        async changePageSize() {
+          await this.loadEntity(this.selected.keyspace, this.selected.entity, this.selected.entityType, true);
+        },
+
+        restoreFromURL() {
+          const path = window.location.pathname;
+          const match = path.match(/^\/(table|view|materialized_view)\/([^\/]+)\/([^\/]+)$/);
+          
+          if (match) {
+            const [, entityType, keyspace, entity] = match;
+            this.loadEntity(keyspace, entity, entityType);
+          }
+        },
+
+        truncateEntity(keyspace, entity, entityType) {
+          this.modalData = { keyspace, entity, entityType };
+          const modal = new bootstrap.Modal(document.getElementById('truncate_modal'));
+          modal.show();
+        },
+
+        dropEntity(keyspace, entity, entityType) {
+          this.modalData = { keyspace, entity, entityType };
+          const modal = new bootstrap.Modal(document.getElementById('drop_entity_modal'));
+          modal.show();
+        },
+
+        exportEntity(keyspace, entity, entityType) {
+          this.modalData = { keyspace, entity, entityType };
+          
+          const form = document.getElementById('exportForm');
+          form.action = `/api/${entityType}/${keyspace}/${entity}/export`;
+          
+          const modal = new bootstrap.Modal(document.getElementById('export_modal'));
+          modal.show();
+        },
+
+        dropKeyspace(keyspace) {
+          this.modalData = { keyspace };
+          const modal = new bootstrap.Modal(document.getElementById('drop_keyspace_modal'));
+          modal.show();
+        },
+
+        async executeTruncate() {
+          const { keyspace, entity, entityType } = this.modalData;
+          const modal = bootstrap.Modal.getInstance(document.getElementById('truncate_modal'));
+          modal.hide();
+
+          try {
+            const response = await fetch(`/api/${entityType}/${keyspace}/${entity}/truncate`, {
+              method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || 'Failed to truncate');
+            }
+
+            this.handleSuccess('Truncate', `${entityType} ${keyspace}.${entity} truncated successfully`);
+            await this.loadEntity(keyspace, entity, entityType);
+          } catch (error) {
+            this.handleError('Truncate', error);
+          }
+        },
+
+        async executeDropEntity() {
+          const { keyspace, entity, entityType } = this.modalData;
+          const modal = bootstrap.Modal.getInstance(document.getElementById('drop_entity_modal'));
+          modal.hide();
+
+          try {
+            const response = await fetch(`/api/${entityType}/${keyspace}/${entity}/drop`, {
+              method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || 'Failed to drop');
+            }
+
+            this.handleSuccess('Drop', `${entityType} ${keyspace}.${entity} dropped successfully`);
+
+            await this.loadSchema();
+            this.selected = { keyspace: keyspace, entity: null, entityType: null };
+            this.entityData = null;
+
+          } catch (error) {
+            this.handleError('Drop', error);
+          }
+        },
+
+        async executeDropKeyspace() {
+          const { keyspace } = this.modalData;
+          const modal = bootstrap.Modal.getInstance(document.getElementById('drop_keyspace_modal'));
+          modal.hide();
+
+          try {
+            const response = await fetch(`/api/keyspace/${keyspace}/drop`, {
+              method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || 'Failed to drop keyspace');
+            }
+
+            this.handleSuccess('Keyspace Drop', `Keyspace ${keyspace} dropped successfully`);
+
+            await this.loadSchema();
+            this.selected = { keyspace: null, entity: null, entityType: null };
+            this.entityData = null;
+
+          } catch (error) {
+            this.handleError('Keyspace Drop', error);
+          }
+        },
+
+        goHome() {
+          this.selected = { keyspace: null, entity: null, entityType: null };
+          this.entityData = null;
+          this.resetPagination();
+          window.history.pushState({}, '', '/');
+        },
+
+        init() {
+          this.loadSchema();
+          this.restoreFromURL();
+
+          window.addEventListener('popstate', (event) => {
+            if (event.state && event.state.keyspace && event.state.entity && event.state.entityType) {
+              this.selected = { keyspace: event.state.keyspace, entity: event.state.entity, entityType: event.state.entityType };
+              this.loadEntity(event.state.keyspace, event.state.entity, event.state.entityType);
+            }
+          });
+        }
+      }
+    }
+  </script>
+
+</body>
+
+</html>

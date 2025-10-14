@@ -1,0 +1,30 @@
+services:
+  cassandra-admin:
+    build: 
+      context: .
+    container_name: cassandra_admin
+    environment:
+      - CASSANDRA_HOST=cassandra_db
+      - CASSANDRA_USER=cassandra
+      - CASSANDRA_PASSWORD=cassandra
+    ports:
+      - "8002:80"
+    volumes:
+      - ./src:/app
+      - ./lib:/lualib
+      - ./nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
+    restart: unless-stopped
+    init: true
+  cassandra:
+    image: cassandra:3.11
+    container_name: cassandra_db
+    hostname: cassandra
+    environment:
+      - CASSANDRA_CLUSTER_NAME=TestCluster
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=100M
+    restart: unless-stopped
+    
