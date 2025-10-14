@@ -94,11 +94,11 @@
                       </a>
                       <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
                         <li>
-                          <a class="dropdown-item small" href="javascript:void()" @click.prevent="exportEntity(ks.keyspace, entity.name, entity.type)">
+                          <a class="dropdown-item small" href="javascript:void(0)" @click.prevent="exportEntity(ks.keyspace, entity.name, entity.type)">
                             <i class="bi bi-download me-2"></i>Export</span>
                           </a>
                         </li>
-                        <li>
+                        <li x-show="entity.type === 'table'">
                           <a class="dropdown-item small" href="javascript:void(0)" @click.prevent="truncateEntity(ks.keyspace, entity.name, entity.type)">
                             <i class="bi bi-scissors me-2"></i>Truncate
                           </a>
