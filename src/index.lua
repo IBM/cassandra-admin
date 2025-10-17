@@ -3,6 +3,11 @@ local db = require("db")
 local config = require("config")
 local utils = require("utils")
 
+app.configure_template({
+    template_root = config.template_path or "templates",
+    caching = not (os.getenv("CA_DEBUG_MODE") == "true")
+})
+
 local function getSchemaHandler(req, res)
     local schema = db.getSchema()
     if not schema then
@@ -28,12 +33,15 @@ local function truncateTableHandler(req, res)
     return res.json({ success = true, message = "Table truncated" })
 end
 
-local function dropTableHandler(req, res)
-    local ok, err = db.dropTable(req.params.keyspace, req.params.table)
+local function dropEntityHandler(req, res)
+    if not utils.table_contains({"table", "view"}, req.params.entity) then
+        return res.status(400).json({ error = "Invalid entity type" })
+    end
+    local ok, err = db.dropEntity(req.params.entity, req.params.keyspace, req.params.table)
     if not ok then
         return res.status(500).json({ error = "Failed to drop table: " .. tostring(err) })
     end
-    return res.json({ success = true, message = "Table dropped" })
+    return res.json({ success = true, message = string.format("Dropped %s %s.%s", req.params.entity, req.params.keyspace, req.params.table) })
 end
 
 local function exportTableHandler(req, res)
@@ -69,9 +77,11 @@ app.get("/api/schema", getSchemaHandler)
 app.get("/api/table/:keyspace/:table", getTableDataHandler)
 app.get("/api/view/:keyspace/:view", getTableDataHandler)
 app.post("/api/table/:keyspace/:table/truncate", truncateTableHandler)
-app.post("/api/table/:keyspace/:table/drop", dropTableHandler)
+app.post("/api/:entity/:keyspace/:table/drop", dropEntityHandler)
 app.post("/api/table/:keyspace/:table/export", exportTableHandler)
 app.post("/api/view/:keyspace/:table/export", exportTableHandler)
 app.post("/api/keyspace/:keyspace/drop", dropKeyspaceHandler)
-
+app.get("/settings", function(req, res)
+    res.render("settings.html", { config = config, inspect = require("inspect") })
+end)
 app.run()

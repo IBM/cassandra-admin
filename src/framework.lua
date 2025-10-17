@@ -1,5 +1,6 @@
 local template = require("resty.template")
 local config = require("config")
+local constants = require("constants")
 local reqargs = require("resty.reqargs")
 local cjson = require("cjson")
 cjson.encode_empty_table_as_object(false)
@@ -34,6 +35,17 @@ function _M.delete(path, ...)
     local args = {...}
     local handler = table.remove(args)
     routes.DELETE[path] = { handler = handler, middleware = args }
+end
+
+function _M.configure_template(options)
+    options = options or {}
+    if options.template_root then
+        template.root = options.template_root
+    end
+    if options.caching ~= nil then
+        template.caching(options.caching)
+    end
+    return template
 end
 
 local function create_context()    
@@ -92,6 +104,7 @@ local function create_context()
                 ngx.header["Content-Type"] = "text/html"
                 data = data or {}
                 data.config = config
+                data.constants = constants
                 template.render(view, data)
             end,
             status = function(code)
