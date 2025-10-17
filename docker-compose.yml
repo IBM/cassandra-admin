@@ -12,8 +12,6 @@ services:
     volumes:
       - ./src:/app
       - ./lib:/lualib
-      - ./nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
-      - ./settings.cfg:/etc/cassandra-admin/settings.cfg
     restart: unless-stopped
     init: true
   cassandra:
