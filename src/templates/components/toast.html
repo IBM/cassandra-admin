@@ -1,0 +1,12 @@
+<div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 11000;">
+    <template x-for="toast in visibleToasts" :key="toast.id">
+    <div class="toast show" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header" :class="toast.type === 'error' ? 'bg-danger text-white' : toast.type === 'success' ? 'bg-success text-white' : 'bg-info text-white'">
+        <i class="bi me-2" :class="toast.type === 'error' ? 'bi-exclamation-circle-fill' : toast.type === 'success' ? 'bi-check-circle-fill' : 'bi-info-circle-fill'"></i>
+        <strong class="me-auto" x-text="toast.title"></strong>
+        <button type="button" class="btn-close" :class="toast.type === 'error' || toast.type === 'success' ? 'btn-close-white' : ''" @click="removeToast(toast.id)" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" x-text="toast.message"></div>
+    </div>
+    </template>
+</div>

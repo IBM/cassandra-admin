@@ -1,0 +1,40 @@
+{% layout="layout.html" %}
+<div x-data="settings">
+  {(components/toast.html)}
+  <div class="container py-4">
+    <nav class="mb-4">
+      <a href="/" 
+         class="btn btn-link">
+        <i class="bi bi-arrow-left"></i> Go Back
+      </a>
+    </nav>
+    
+    <h2>Settings</h2>
+    
+    <form @submit.prevent="saveSettings">
+      <div class="mb-3">
+        <label class="form-label">Cassandra Host</label>
+        <input type="text" class="form-control" x-model="host">
+      </div>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</div>
+
+<script>
+function settings() {
+return {
+    host: '',
+    toasts: [],
+    visibleToasts: [],
+
+    async saveSettings() {
+        console.log('Saving settings:', this.host);
+    },
+
+    init() {
+        console.log('Settings initialized');
+    }
+}
+}
+</script>
