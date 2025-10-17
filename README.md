@@ -6,44 +6,17 @@ A web-based admin interface for Apache Cassandra, powered by [alpine.js](https:/
 
 ## Features
 
-### Schema Management
-- **Real-time Schema Browser** - Interactive sidebar displaying all keyspaces, tables, and views in your Cassandra cluster
-- **System Keyspaces Protection** - Built-in safeguards prevent accidental modifications to system keyspaces
-
-### Data Viewing
-- **Paginated Data Display** - Browse table and view data with customizable page sizes (50, 100, 200 rows)
+- **Schema Management** - Sidebar displaying all keyspaces, tables, and views in your Cassandra instance
+- **Data Viewing** - Browse table and view data with customizable page sizes (50, 100, 200 rows)
 - **Cursor-based pagination** - Cursor-based pagination using Cassandra's native paging states
-- **Column Type Display** - Visual indicators showing data types for each column
-- **Key Identification** - Clear icons distinguishing partition keys and clustering keys
-- **Formatted Output** - Automatic formatting for complex types (lists, sets, maps, blobs, UUIDs)
-
-### Data Export
-- **Multiple Export Formats** - Export data as CQL, CSV, or JSON
-- **Flexible Export Options** - Configure row limits and choose whether to include DDL statements
-- **DDL Generation** - CREATE TABLE statement generation with full schema details
-
-### Table Operations
-- **Truncate**
-- **Drop**
-- (more to come)
-
-### Keyspace Operations
-- **Drop**
-- (more to come)
-
-### User Interface
-- **Modern Responsive Design** - Clean Bootstrap 5 and Alpine.js frontend for an intuitive user experience.
-- **URL-based Navigation** - Direct links to specific tables and views with browser history support
-- **Context Menus** - Quick-access dropdown menus for entity operations
-- **Toast Notifications** - Clear success and error messages for all operations
-- **Loading States** - Visual feedback during data operations and schema loading
-- **Keyboard-friendly** - Intuitive navigation with keyboard support
-
-### Technical Features
-- **Lightweight & Fast** - Built on OpenResty/Nginx for high performance
-- **Connection Pooling** - Efficient Cassandra connection management
-- **Environment Configuration** - Flexible configuration via environment variables
-- **Minimal Dependencies** - Self-contained application with CDN-based frontend assets
+- **Column Type Display** - Visual indicators showing data types for each column and icons distinguishing partition keys and clustering keys
+- **Formatted Output** - `cqlsh`-like formatting for complex types
+- **Safeguards** - Built-in safeguards prevent accidental modifications to system keyspaces
+- **Data Export** - Export data as CQL, CSV, or JSON and configure row limits and choose whether to include DDL statements
+- **Quick table operations** - Truncate or drop tables and views directly from the UI (more to come)
+- **Quick keyspace Operations** - Drop keyspaces (more to come)
+- **Environment Configuration** - Flexible configuration via environment variables or a configuration file
+- **Dark Mode** - Dark mode support for comfortable viewing in low-light environments
 
 ## Quick Setup
 
@@ -65,14 +38,30 @@ Access the admin interface at `http://localhost:8002`
 
 The application can be configured via the following environment variables:
 ```
-CASSANDRA_HOST        # default: 127.0.0.1
-CASSANDRA_PORT        # default: 9042
-CASSANDRA_USER        # default: cassandra
-CASSANDRA_PASSWORD    # default: cassandra
+CA_CONNECTION_HOST        # default: 127.0.0.1
+CA_CONNECTION_PORT        # default: 9042
+CA_CONNECTION_USERNAME    # default: cassandra
+CA_CONNECTION_PASSWORD    # default: cassandra
+CA_CONNECTION_TIMEOUT     # default: 5 (seconds)
+```
+
+### Configuration File
+You can also create a `settings.cfg` file in the same directory as the application with the following format (mapped to `/etc/cassandra-admin/settings.cfg` in the Docker container):
+
+```lua
+{
+  connection = {
+    host = "cassandra_container",
+    port = 9042,
+    username = "cassandra",
+    password = "cassandra"
+  },
+  page_sizes = {50, 100, 200},
+  default_page_size = 50,
+}
 ```
 
 ## Limitations
-
 This list is not exhaustive, but here are some limitations of the current version:
 
 - **No multi-node support** - Multi-host/multi-datacenter cluster support is planned for a future release. Currently connects to one contact point only.
