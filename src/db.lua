@@ -6,20 +6,14 @@ local utils = require("utils")
 
 local _M = {}
 
-local system_keyspaces = {
-    system = true,
-    system_auth = true,
-    system_distributed = true,
-    system_schema = true,
-    system_traces = true,
-}
-
+local system_keyspaces = {"system", "system_auth", "system_distributed", "system_schema", "system_traces"}
 
 local function handle_error(err)
     local error_msg = string.format("Database error: %s", tostring(err))
     ngx.log(ngx.ERR, error_msg)
     
     ngx.header.content_type = "application/json"
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
     ngx.say(cjson.encode({
         error = true,
         message = error_msg
@@ -41,7 +35,7 @@ local function connect()
     return peer
 end
 
-local function execute_query(query, params, options)
+local function execute(query, params, options)
     local peer = connect()
 
     if not peer then
@@ -78,19 +72,18 @@ function _M.getSchema()
         handle_error("Failed to fetch views")
     end
 
-    -- Build unified relations list per keyspace
     local keyspace_entities = {}
     for _, tbl in ipairs(tables) do
         if not keyspace_entities[tbl.keyspace_name] then
             keyspace_entities[tbl.keyspace_name] = {}
         end
-        table.insert(keyspace_entities[tbl.keyspace_name], { name = tbl.table_name, type = "table" })
+        table.insert(keyspace_entities[tbl.keyspace_name], { name = tbl.table_name, type = "table", comment = tbl.comment })
     end
     for _, view in ipairs(views) do
         if not keyspace_entities[view.keyspace_name] then
             keyspace_entities[view.keyspace_name] = {}
         end
-        table.insert(keyspace_entities[view.keyspace_name], { name = view.view_name, type = "view" })
+        table.insert(keyspace_entities[view.keyspace_name], { name = view.view_name, type = "view", comment = view.comment })
     end
 
     local schema = {}
@@ -112,14 +105,14 @@ function _M.getSchema()
     return schema
 end
 
-function _M.get_table_columns(keyspace, table_name)
+local function getTableColumns(keyspace, table_name)
     local query = string.format([[
         SELECT column_name, type, kind, clustering_order, position
         FROM system_schema.columns 
         WHERE keyspace_name = '%s' AND table_name = '%s'
     ]], keyspace, table_name)
 
-    local result = execute_query(query)
+    local result = execute(query)
     if not result then
         return nil, "Failed to fetch columns"
     end
@@ -142,10 +135,10 @@ function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
         end
     end
     
-    local columns = _M.get_table_columns(keyspace, table_name)
+    local columns = getTableColumns(keyspace, table_name)
 
     local query = string.format("SELECT * FROM %s.%s", keyspace, table_name)
-    local result = execute_query(query, nil, query_options)
+    local result = execute(query, nil, query_options)
     
     local has_more_pages = false
     local next_paging_state = nil
@@ -173,32 +166,37 @@ function _M.getTableData(keyspace, table_name, page_size, paging_state_encoded)
 end
 
 function _M.truncateTable(keyspace, table_name)
-    if system_keyspaces[keyspace] then
+    if utils.table_contains(system_keyspaces, keyspace) then
         return nil, "System keyspaces are not user-modifiable."
     end
 
-    local query = string.format("TRUNCATE %s", table_name)
-    local result = execute_query(query)
+    local query = string.format("TRUNCATE %s.%s", keyspace, table_name)
+    local result = execute(query)
     
     return true
 end
 
-function _M.dropTable(keyspace, table_name)
-    if system_keyspaces[keyspace] then
+function _M.dropEntity(entity_type, keyspace, table_name)
+    if utils.table_contains(system_keyspaces, keyspace) then
         return nil, "System keyspaces are not user-modifiable."
     end
 
-    local result = execute_query(string.format("DROP TABLE %s", table_name))
+    local entity_types = {
+        table = "TABLE",
+        view = "MATERIALIZED VIEW"
+    }
+    
+    local result = execute(string.format("DROP %s %s.%s", entity_types[entity_type], keyspace, table_name))
 
     return true
 end
 
 function _M.dropKeyspace(keyspace)
-    if system_keyspaces[keyspace] then
+    if utils.table_contains(system_keyspaces, keyspace) then
         return nil, "System keyspaces are not user-modifiable."
     end
 
-    local result = execute_query(string.format("DROP KEYSPACE %s", keyspace))
+    local result = execute(string.format("DROP KEYSPACE %s", keyspace))
 
     return true
 end
@@ -206,15 +204,17 @@ end
 function _M.getTableDDL(keyspace, table_name)
     local table_info_query = string.format([[
         SELECT * FROM system_schema.tables 
-        WHERE keyspace_name = '%s' AND table_name = '%s'
+        WHERE keyspace_name = '%s' AND table_name = '%s' LIMIT 1
     ]], keyspace, table_name)
 
-    local table_info = execute_query(table_info_query)
+    local table_info = execute(table_info_query)
     if #table_info == 0 then
         return nil, "Table does not exist"
     end
     
-    local columns = _M.get_table_columns(keyspace, table_name)
+    local tbl = table_info[1]
+    
+    local columns = getTableColumns(keyspace, table_name)
     
     local cql = {}
     table.insert(cql, string.format("CREATE TABLE IF NOT EXISTS %s.%s (", keyspace, table_name))
@@ -248,6 +248,17 @@ function _M.getTableDDL(keyspace, table_name)
     table.insert(cql, pk)
     table.insert(cql, ")")
 
+    local column_type_map = {}
+    if table_info.columns and type(table_info.columns) == "table" then
+        for _, col_meta in ipairs(table_info.columns) do
+            if col_meta and col_meta.name then
+                column_type_map[col_meta.name] = col_meta.type
+            end
+        end
+    end
+    
+    local with_clauses = {}
+    
     if #clustering_keys > 0 then
         local orders = {}
         for _, col in ipairs(columns) do
@@ -259,40 +270,39 @@ function _M.getTableDDL(keyspace, table_name)
             table.insert(cql, "WITH CLUSTERING ORDER BY (" .. table.concat(orders, ", ") .. ")")
         end
     end
-
-    local formatted_info = formatting.format_rows(table_info)
-    if formatted_info and #formatted_info > 0 then
-        local info = formatted_info[1]
-        local options = {}
-        
-        local skip_columns = {
-            keyspace_name = true,
-            table_name = true,
-            id = true,
-            flags = true
-        }
-        
-        for column, value in pairs(info) do
-            if not skip_columns[column] and value ~= nil and value ~= "" then
-                table.insert(options, string.format("%s = %s", column, value))
-            end
+    
+    local skip_columns = {
+        keyspace_name = true,
+        table_name = true,
+        id = true,
+        flags = true
+    }
+    
+    local properties = {}
+    for column_name, value in pairs(tbl) do
+        if not skip_columns[column_name] and value ~= nil and value ~= "" then
+            local type_info = column_type_map[column_name]
+            local formatted_value = formatting.format_cql_value(value, type_info)
+            table.insert(properties, {
+                name = column_name,
+                value = formatted_value
+            })
         end
-        
-        if #options > 0 then
-            table.sort(options)
-            local options_str = table.concat(options, "\n    AND ")
-            if #clustering_keys == 0 then
-                table.insert(cql, "WITH " .. options_str .. ";")
-            else
-                table.insert(cql, "AND " .. options_str .. ";")
-            end
-        else
-            table.insert(cql, ";")
-        end
-    else
-        table.insert(cql, ";")
     end
     
+    table.sort(properties, function(a, b)
+        return a.name < b.name
+    end)
+    
+    for _, prop in ipairs(properties) do
+        table.insert(with_clauses, "AND " .. prop.name .. " = " .. prop.value)
+    end
+    
+    if #with_clauses > 0 then
+        table.insert(cql, table.concat(with_clauses, "\n"))
+    end
+    
+    table.insert(cql, ";")
     return table.concat(cql, "\n")
 end
 
@@ -302,20 +312,13 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
     end
 
     local limit = utils.coerce_positive_integer(limit, 100)
-
-    local columns = _M.get_table_columns(keyspace, table_name)
-    
-    local data_query = string.format("SELECT * FROM %s.%s", keyspace, table_name)
-    
-    data_query = data_query .. string.format(" LIMIT %d", limit)
-    
-    local result = execute_query(data_query)
-    
-    if not result then
-        result = {}
-    end
-
+    local columns = getTableColumns(keyspace, table_name)
+    local result = execute(string.format("SELECT * FROM %s.%s LIMIT %d", keyspace, table_name, limit))
     local formatted_rows = formatting.format_rows(result)
+
+    if format == "json" then
+        return cjson.encode(formatted_rows)
+    end
     
     local output = {}
     
@@ -328,31 +331,27 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
             end
         end
         
-        for _, formatted_row in ipairs(formatted_rows) do
-            local col_names = {}
-            local values = {}
-            
-            for _, col in ipairs(columns) do
-                local val = formatted_row[col.column_name]
-                if val ~= nil and val ~= "" then
-                    table.insert(col_names, col.column_name)
-                    -- fix this
-                    if type(val) == "string" and not val:match("^0x") then
-                        table.insert(values, string.format("'%s'", val:gsub("'", "''")))
-                    else
-                        table.insert(values, val)
-                    end
+        local column_type_map = {}
+        if result.columns and type(result.columns) == "table" then
+            for _, col_meta in ipairs(result.columns) do
+                if col_meta and col_meta.name then
+                    column_type_map[col_meta.name] = col_meta.type
                 end
             end
-            
-            if #col_names > 0 then
-                table.insert(output, string.format(
-                    "INSERT INTO %s.%s (%s) VALUES (%s);",
-                    keyspace,
-                    table_name,
-                    table.concat(col_names, ", "),
-                    table.concat(values, ", ")
-                ))
+        end
+        
+        for _, row in ipairs(result) do
+            if type(row) == "table" then
+                local insert_stmt = formatting.format_cql_insert(
+                    keyspace, 
+                    table_name, 
+                    row, 
+                    columns, 
+                    column_type_map
+                )
+                if insert_stmt then
+                    table.insert(output, insert_stmt)
+                end
             end
         end
     end
@@ -379,11 +378,6 @@ function _M.exportTableData(keyspace, table_name, format, limit, include_ddl)
             table.insert(output, table.concat(values, ","))
         end
     end
-
-    if format == "json" then
-        return cjson.encode(formatted_rows)
-    end
-    
     return table.concat(output, "\n")
 end
 

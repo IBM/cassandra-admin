@@ -122,6 +122,144 @@ function _M.format(value, type_info)
     end
 end
 
+function _M.format_cql_value(value, type_info)
+    if value == nil or value == "" then
+        return "null"
+    end
+    
+    if not type_info then
+        -- No type info, attempt to format safely
+        if type(value) == "string" then
+            return "'" .. value:gsub("'", "''") .. "'"
+        end
+        return tostring(value)
+    end
+    
+    local cql_type = type_info.__cql_type
+    
+    -- Numeric types - no quotes
+    if cql_type == cql_types.int or 
+       cql_type == cql_types.bigint or 
+       cql_type == cql_types.counter or
+       cql_type == cql_types.varint or
+       cql_type == cql_types.float or
+       cql_type == cql_types.double or
+       cql_type == cql_types.decimal then
+        return tostring(value)
+    end
+    
+    -- Boolean - no quotes
+    if cql_type == cql_types.boolean then
+        return tostring(value)
+    end
+    
+    -- Blob - hex format, no quotes
+    if cql_type == cql_types.blob then
+        return _M.blob_to_hex(value)
+    end
+    
+    -- UUID/TimeUUID - no quotes
+    if cql_type == cql_types.uuid or cql_type == cql_types.timeuuid then
+        return tostring(value)
+    end
+    
+    -- Text types - with quotes
+    if cql_type == cql_types.text or 
+       cql_type == cql_types.varchar or 
+       cql_type == cql_types.ascii then
+        return "'" .. tostring(value):gsub("'", "''") .. "'"
+    end
+    
+    -- Timestamp - with quotes
+    if cql_type == cql_types.timestamp then
+        return "'" .. tostring(value) .. "'"
+    end
+    
+    -- Inet - with quotes
+    if cql_type == cql_types.inet then
+        return "'" .. tostring(value) .. "'"
+    end
+    
+    -- Collections
+    if cql_type == cql_types.list then
+        if type(value) ~= "table" then
+            return "[]"
+        end
+        local parts = {}
+        local elem_type = type_info.__cql_type_value
+        for _, v in ipairs(value) do
+            table.insert(parts, _M.format_cql_value(v, elem_type))
+        end
+        return "[" .. table.concat(parts, ", ") .. "]"
+    end
+    
+    if cql_type == cql_types.set then
+        if type(value) ~= "table" then
+            return "{}"
+        end
+        local parts = {}
+        local elem_type = type_info.__cql_type_value
+        for _, v in ipairs(value) do
+            table.insert(parts, _M.format_cql_value(v, elem_type))
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    
+    if cql_type == cql_types.map then
+        if type(value) ~= "table" then
+            return "{}"
+        end
+        local parts = {}
+        local key_type = type_info.__cql_type_value and type_info.__cql_type_value[1]
+        local val_type = type_info.__cql_type_value and type_info.__cql_type_value[2]
+        
+        for k, v in pairs(value) do
+            local key_str = _M.format_cql_value(k, key_type)
+            local val_str = _M.format_cql_value(v, val_type)
+            table.insert(parts, key_str .. ": " .. val_str)
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    
+    -- UDT and Tuple - treat as generic with quotes
+    if cql_type == cql_types.udt or cql_type == cql_types.tuple then
+        return "'" .. tostring(value):gsub("'", "''") .. "'"
+    end
+    
+    -- Default fallback - quote it
+    return "'" .. tostring(value):gsub("'", "''") .. "'"
+end
+
+-- Generate CQL INSERT statement from a row
+function _M.format_cql_insert(keyspace, table_name, row, columns, column_type_map)
+    local col_names = {}
+    local values = {}
+    
+    for _, col in ipairs(columns) do
+        local val = row[col.column_name]
+        
+        if val ~= nil and val ~= "" then
+            table.insert(col_names, col.column_name)
+            
+            local type_info = column_type_map and column_type_map[col.column_name]
+            table.insert(values, _M.format_cql_value(val, type_info))
+        end
+    end
+    
+    if #col_names == 0 then
+        return nil
+    end
+    
+    return string.format(
+        "INSERT INTO %s.%s (%s) VALUES (%s);",
+        keyspace,
+        table_name,
+        table.concat(col_names, ", "),
+        table.concat(values, ", ")
+    )
+end
+
 function _M.get_sorted_columns(col_rows)
     local columns = {}
     for _, row in ipairs(col_rows) do
