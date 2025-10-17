@@ -4,15 +4,16 @@ services:
       context: .
     container_name: cassandra_admin
     environment:
-      - CASSANDRA_HOST=cassandra_db
-      - CASSANDRA_USER=cassandra
-      - CASSANDRA_PASSWORD=cassandra
+      - CA_CONNECTION_HOST=cassandra_db
+      - CA_CONNECTION_USERNAME=cassandra
+      - CA_CONNECTION_PASSWORD=cassandra
     ports:
       - "8002:80"
     volumes:
       - ./src:/app
       - ./lib:/lualib
       - ./nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
+      - ./settings.cfg:/etc/cassandra-admin/settings.cfg
     restart: unless-stopped
     init: true
   cassandra:
