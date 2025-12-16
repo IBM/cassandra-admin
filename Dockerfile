@@ -1,16 +1,21 @@
-FROM openresty/openresty:alpine
-WORKDIR /app
+FROM python:3.11-alpine
 
-RUN apk update && apk add luarocks5.1 && ln -sf /usr/bin/luarocks-5.1 /usr/bin/luarocks
-RUN luarocks install lua-resty-template \
-    && luarocks install lua-resty-reqargs \
-    && luarocks install inspect
+ARG CASSANDRA_VERSION=5.0.1
+ENV PYTHONPATH=/opt/cassandra/pylib:/opt/cassandra/bin
+ENV PATH="/opt/cassandra/bin:${PATH}"
 
-RUN adduser -D -g 'appuser' appuser
+COPY ./src /app
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-RUN mkdir -p /run/app/logs && chown -R appuser:appuser /run/app
-RUN mkdir -p /etc/cassandra-admin && chown -R appuser:appuser /etc/cassandra-admin
+RUN wget https://github.com/apache/cassandra/archive/refs/tags/cassandra-${CASSANDRA_VERSION}.tar.gz && \
+    mkdir -p /opt/cassandra && \
+    tar -xzf cassandra-*.tar.gz --strip-components=1 -C /opt/cassandra && \
+    rm cassandra-*.tar.gz
 
-USER appuser
+RUN echo "version = \"${CASSANDRA_VERSION}\"" > /opt/cassandra/pylib/cqlshlib/serverversion.py
 
-CMD ["/bin/sh", "-c", "/app/_docker_entrypoint.lua > /run/app/nginx.conf && exec nginx -p /run/app -c /run/app/nginx.conf"]
+RUN if [ ! -f /opt/cassandra/pylib/cqlshlib/cqlshmain.py ]; then \
+        cp /opt/cassandra/bin/cqlsh.py /opt/cassandra/pylib/cqlshlib/cqlshmain.py; \
+    fi
+
+CMD ["python", "/app/app.py"]

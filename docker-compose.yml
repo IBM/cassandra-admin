@@ -4,9 +4,11 @@ services:
       context: .
     container_name: cassandra_admin
     environment:
-      - CA_CONNECTION_HOST=cassandra_db
-      - CA_CONNECTION_USERNAME=cassandra
-      - CA_CONNECTION_PASSWORD=cassandra
+      - FLASK_ENV=development
+      - FLASK_APP=app.py
+      - CASSANDRA_HOST=cassandra_db
+      - CASSANDRA_USERNAME=cassandra
+      - CASSANDRA_PASSWORD=cassandra
     ports:
       - "8002:80"
     volumes:
