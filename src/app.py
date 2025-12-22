@@ -1,76 +1,20 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask.json.provider import DefaultJSONProvider
+from flask import Flask, request, send_from_directory
 import sys
 import os
 from io import StringIO
-import json
-from decimal import Decimal
-from uuid import UUID
-from datetime import datetime, date
-import ipaddress
-
-# Add cqlsh pylib directly to path
 sys.path.insert(0, '/opt/cassandra/pylib')
+from cqlshlib.cqlshmain import Shell, version as cqlsh_version
 
-from cqlshlib.cqlshmain import Shell
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.query import dict_factory
-from cassandra.util import SortedSet, OrderedMapSerializedKey
+try:
+    from cqlshlib.cqlshmain import insert_driver_hooks
+    insert_driver_hooks()
+except (ImportError, AttributeError):
+    pass
 
 app = Flask(__name__)
 shells = {}
-paging_states = {}
 
-# Check if we should auto-connect on startup
 AUTO_CONNECT = os.getenv('CASSANDRA_HOST') is not None
-
-
-# Custom JSON provider for Flask 2.2+
-class CassandraJSONProvider(DefaultJSONProvider):
-    def default(self, obj):
-        if isinstance(obj, (set, frozenset, SortedSet)):
-            return list(obj)
-        if isinstance(obj, OrderedMapSerializedKey):
-            return dict(obj)
-        if isinstance(obj, UUID):
-            return str(obj)
-        if isinstance(obj, (datetime, date)):
-            return obj.isoformat()
-        if isinstance(obj, Decimal):
-            return float(obj)
-        if isinstance(obj, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
-            return str(obj)
-        if isinstance(obj, bytes):
-            return obj.hex()
-        return super().default(obj)
-
-
-app.json = CassandraJSONProvider(app)
-
-
-def serialize_value(value):
-    """Convert Cassandra types to JSON-serializable types"""
-    if isinstance(value, (set, frozenset, SortedSet)):
-        return list(value)
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
-        return str(value)
-    if isinstance(value, OrderedMapSerializedKey):
-        return dict(value)
-    return value
-
-
-def serialize_row(row):
-    """Serialize a single row dict"""
-    return {key: serialize_value(value) for key, value in row.items()}
-
 
 def extract_column_metadata(column_names, table_meta):
     """Extract column metadata from table metadata"""
@@ -103,21 +47,6 @@ def extract_column_metadata(column_names, table_meta):
     return column_metadata
 
 
-def format_result(result, column_names, table_meta):
-    """Format a result set into JSON structure"""
-    all_rows = [serialize_row(row) for row in result.current_rows] if result.current_rows else []
-    column_metadata = extract_column_metadata(column_names, table_meta)
-    
-    return {
-        'keyspace': table_meta.keyspace_name if table_meta else None,
-        'rows': all_rows,
-        'row_count': len(all_rows),
-        'column_metadata': column_metadata,
-        'has_more_pages': result.has_more_pages,
-        'paging_state': result.paging_state.hex() if result.paging_state else None
-    }
-
-
 def patch_shell_for_json():
     """Monkey-patch Shell class to output JSON instead of formatted text"""
     
@@ -130,19 +59,50 @@ def patch_shell_for_json():
             return original_print_result(self, result, table_meta)
         
         column_names = result.column_names or (list(table_meta.columns.keys()) if table_meta else [])
-        self._json_output = format_result(result, column_names, table_meta)
+        
+        cql_types = []
+        if result.column_types:
+            ks_name = table_meta.keyspace_name if table_meta else self.current_keyspace
+            ks_meta = self.conn.metadata.keyspaces.get(ks_name, None)
+            from cassandra.cqltypes import cql_typename
+            from cqlshlib.formatting import CqlType
+            cql_types = [CqlType(cql_typename(t), ks_meta) for t in result.column_types]
+        
+        all_rows = []
+        if result.current_rows:
+            from cqlshlib.displaying import get_str
+            for row in result.current_rows:
+                row_dict = {}
+                for idx, col_name in enumerate(column_names):
+                    value = row[col_name]
+                    cqltype = cql_types[idx] if idx < len(cql_types) else None
+                    
+                    # Use the shell's own formatting and extract string
+                    formatted = self.myformat_value(value, cqltype=cqltype)
+                    row_dict[col_name] = get_str(formatted)
+                
+                all_rows.append(row_dict)
+        
+        column_metadata = extract_column_metadata(column_names, table_meta)
+        
+        self._json_output = {
+            'keyspace': table_meta.keyspace_name if table_meta else None,
+            'table': table_meta.name if table_meta else None,
+            'rows': all_rows,
+            'row_count': len(all_rows),
+            'column_metadata': column_metadata,
+            'has_more_pages': result.has_more_pages,
+            'paging_state': result.paging_state.hex() if result.paging_state else None
+        }
     
     def json_writeresult(self, text, color=None, newline=True, out=None):
         if not getattr(self, '_json_mode', False):
             return original_writeresult(self, text, color, newline, out)
         
-        # Capture all text output
         if not hasattr(self, '_text_output'):
             self._text_output = []
         
-        # Convert text to string
-        text_str = str(text)
-        self._text_output.append(text_str)
+        self._text_output.append(str(text))
     
     def json_printerr(self, text, color=None, newline=True, shownum=None):
         if not getattr(self, '_json_mode', False):
@@ -155,45 +115,9 @@ def patch_shell_for_json():
         self._json_output['errors'].append(str(text))
         self.statement_error = True
     
-    def make_noop(command_name, message=None):
-        if message is None:
-            message = f'{command_name.upper()} command not supported in API mode'
-        
-        def noop_method(self, parsed=None):
-            if not getattr(self, '_json_mode', False):
-                # Fallback to original if not in JSON mode
-                original = getattr(Shell, f'_original_{command_name}', None)
-                if original:
-                    return original(self, parsed)
-            
-            if not hasattr(self, '_json_output'):
-                self._json_output = {}
-            self._json_output['error'] = message
-            self.statement_error = True
-        
-        return noop_method
-    
     Shell.print_result = json_print_result
     Shell.writeresult = json_writeresult
     Shell.printerr = json_printerr
-    
-    noop_commands = {
-        'do_login': 'LOGIN not supported - authenticate at connection time using /connect endpoint',
-        'do_exit': 'EXIT not supported - use /disconnect endpoint instead',
-        'do_quit': 'QUIT not supported - use /disconnect endpoint instead',
-        'do_clear': 'CLEAR not supported in API mode',
-        'do_cls': 'CLS not supported in API mode',
-        'do_debug': 'DEBUG not supported in API mode',
-        'do_help': 'HELP not supported - refer to API documentation',
-        'do_history': 'HISTORY not supported in API mode',
-        'do_source': 'SOURCE not supported - execute commands directly via API',
-        'do_capture': 'CAPTURE not supported in API mode',
-    }
-    
-    for cmd, message in noop_commands.items():
-        if hasattr(Shell, cmd):
-            setattr(Shell, '_original_' + cmd, getattr(Shell, cmd))
-            setattr(Shell, cmd, make_noop(cmd, message))
 
 patch_shell_for_json()
 
@@ -201,22 +125,18 @@ patch_shell_for_json()
 def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keyspace=None):
     """Create a patched Shell instance"""
     
-    auth_provider = None
-    if username and password:
-        auth_provider = PlainTextAuthProvider(username=username, password=password)
-    
     desired_args = {
         'hostname': host,
         'port': port,
         'config_file': '/tmp/cqlshrc',
         'color': False,
         'username': username,
+        'password': password,
         'encoding': 'utf-8',
         'stdin': StringIO(),
         'tty': False,
         'keyspace': keyspace,
         'ssl': False,
-        'auth_provider': auth_provider,
         'elapsed_enabled': False,
         'completekey': None
     }
@@ -232,7 +152,7 @@ def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keys
     try:
         from cqlshlib import cqlshmain
         if cqlshmain.cqlruleset is None:
-            from cqlshlib import cql3handling, cqlshhandling
+            from cqlshlib import cql3handling
             cqlshmain.setup_cqlruleset(cql3handling)
     except (ImportError, AttributeError):
         pass
@@ -241,12 +161,11 @@ def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keys
     
     shell._json_mode = True
     shell._json_output = {}
-    shell.session.row_factory = dict_factory
     
     return shell
 
 
-def execute_cql(shell, command, paging_state=None):
+def execute_cql(shell, command):
     """Execute a CQL command and return JSON result"""
     
     if not command.strip().endswith(';'):
@@ -256,43 +175,16 @@ def execute_cql(shell, command, paging_state=None):
     shell._json_output = {}
     shell._text_output = []
     
-    # For paginated queries, use session directly
-    if paging_state:
-        try:
-            from cassandra.query import SimpleStatement
-            stmt = SimpleStatement(command.rstrip(';'), fetch_size=shell.page_size)
-            stmt.paging_state = bytes.fromhex(paging_state)
-            
-            result = shell.session.execute(stmt)
-            
-            # Get table metadata for column info
-            table_meta = None
-            try:
-                table_meta = shell.parse_for_select_meta(command)
-            except:
-                pass
-            
-            column_names = result.column_names or []
-            return format_result(result, column_names, table_meta), False
-            
-        except Exception as e:
-            return {'error': str(e)}, True
-    
     # Capture stdout for commands that use print()
-    import sys
-    from io import StringIO
-    
     old_stdout = sys.stdout
     sys.stdout = StringIO()
     
     try:
-        # Normal execution through shell
         shell.statement.truncate(0)
         shell.statement.seek(0)
         shell.statement.write(command + '\n')
         shell.onecmd(shell.statement.getvalue())
         
-        # Capture any print() output
         printed_output = sys.stdout.getvalue()
         if printed_output:
             shell._text_output.append(printed_output.strip())
@@ -300,32 +192,18 @@ def execute_cql(shell, command, paging_state=None):
         sys.stdout = old_stdout
     
     # Build result from available data
-    result = {}
-
-    result['query'] = command.strip()
+    result = {'last_query': command.strip() }
     
-    # If we have structured data (SELECT queries)
     if shell._json_output:
-        result = shell._json_output.copy()
+        result.update(shell._json_output)
     
-    # If we have text output (DESCRIBE, CONSISTENCY, etc)
     if shell._text_output:
-        if result:
-            # Add text output to existing result
-            result['output'] = '\n'.join(shell._text_output).strip()
-        else:
-            # Text output only
-            result = {
-                'output': '\n'.join(shell._text_output).strip()
-            }
-    
-    # If there are no results at all, return empty dict
-    if not result:
-        result = {}
+        result['output'] = '\n'.join(shell._text_output).strip()
     
     shell.reset_statement()
     
     return result, shell.statement_error
+
 
 @app.route('/')
 @app.route('/keyspace')
@@ -334,6 +212,7 @@ def execute_cql(shell, command, paging_state=None):
 def index(subpath=None):
     """Serve the main HTML interface"""
     return send_from_directory('.', 'index.html')
+
 
 # Only expose /connect endpoint if not auto-connecting
 if not AUTO_CONNECT:
@@ -374,36 +253,33 @@ def table_operations(keyspace_name, table_name):
     if not shell:
         return {'error': 'Not connected. Call /connect first'}, 400
     
+    # Quote identifiers if they contain uppercase or special characters
+    def quote_identifier(name):
+        if name != name.lower() or not name.replace('_', '').isalnum():
+            return f'"{name}"'
+        return name
+    
+    quoted_keyspace = quote_identifier(keyspace_name)
+    quoted_table = quote_identifier(table_name)
+    
     try:
         if request.method == 'GET':
             # SELECT query
             where_clause = request.args.get('where', '')
             limit = request.args.get('limit')
             columns = request.args.get('columns', '*')
-            paging_state = request.args.get('paging_state')
-            page_size = request.args.get('page_size')
             
-            # Build SELECT query
-            query = f"SELECT {columns} FROM {keyspace_name}.{table_name}"
+            # Build SELECT query with quoted identifiers
+            query = f"SELECT {columns} FROM {quoted_keyspace}.{quoted_table}"
             if where_clause:
                 query += f" WHERE {where_clause}"
             if limit:
                 query += f" LIMIT {limit}"
             
-            # Set custom page size if provided
-            original_page_size = None
-            if page_size:
-                original_page_size = shell.page_size
-                shell.page_size = int(page_size)
-            
-            try:
-                result, has_error = execute_cql(shell, query, paging_state)
-                if has_error:
-                    return result, 400
-                return result
-            finally:
-                if original_page_size is not None:
-                    shell.page_size = original_page_size
+            result, has_error = execute_cql(shell, query)
+            if has_error:
+                return result, 400
+            return result
         
         elif request.method == 'POST':
             # INSERT query
@@ -412,10 +288,10 @@ def table_operations(keyspace_name, table_name):
             if not data:
                 return {'error': 'No data provided for INSERT'}, 400
             
-            columns = ', '.join(data.keys())
+            columns = ', '.join([quote_identifier(k) for k in data.keys()])
             values = ', '.join([f"'{v}'" if isinstance(v, str) else str(v) for v in data.values()])
             
-            query = f"INSERT INTO {keyspace_name}.{table_name} ({columns}) VALUES ({values})"
+            query = f"INSERT INTO {quoted_keyspace}.{quoted_table} ({columns}) VALUES ({values})"
             
             result, has_error = execute_cql(shell, query)
             if has_error:
@@ -432,10 +308,10 @@ def table_operations(keyspace_name, table_name):
             if not where_clause:
                 return {'error': 'WHERE clause required for UPDATE'}, 400
             
-            set_clause = ', '.join([f"{k} = '{v}'" if isinstance(v, str) else f"{k} = {v}" 
+            set_clause = ', '.join([f"{quote_identifier(k)} = '{v}'" if isinstance(v, str) else f"{quote_identifier(k)} = {v}" 
                                    for k, v in data.items()])
             
-            query = f"UPDATE {keyspace_name}.{table_name} SET {set_clause} WHERE {where_clause}"
+            query = f"UPDATE {quoted_keyspace}.{quoted_table} SET {set_clause} WHERE {where_clause}"
             
             result, has_error = execute_cql(shell, query)
             if has_error:
@@ -449,7 +325,7 @@ def table_operations(keyspace_name, table_name):
             if not where_clause:
                 return {'error': 'WHERE clause required for DELETE'}, 400
             
-            query = f"DELETE FROM {keyspace_name}.{table_name} WHERE {where_clause}"
+            query = f"DELETE FROM {quoted_keyspace}.{quoted_table} WHERE {where_clause}"
             
             result, has_error = execute_cql(shell, query)
             if has_error:
@@ -466,11 +342,10 @@ def table_operations(keyspace_name, table_name):
 
 @app.route('/api/execute', methods=['POST'])
 def execute():
-    """Execute CQL command with optional pagination"""
+    """Execute CQL command"""
     data = request.json or {}
     command = data.get('command')
     session_id = data.get('session_id', 'default')
-    paging_state = data.get('paging_state')
     page_size = data.get('page_size')
     
     if not command:
@@ -487,9 +362,8 @@ def execute():
         shell.page_size = page_size
     
     try:
-        result, has_error = execute_cql(shell, command, paging_state)
+        result, has_error = execute_cql(shell, command)
         
-        # Return error response if there were errors
         if has_error:
             return result, 400
         
@@ -503,7 +377,6 @@ def execute():
         }, 500
     
     finally:
-        # Restore original page size
         if original_page_size is not None:
             shell.page_size = original_page_size
 
@@ -518,23 +391,18 @@ def get_schema():
     
     try:
         schema_tree = []
-        
-        # Get all keyspaces from cluster metadata
         cluster_meta = shell.session.cluster.metadata
         
-        # Sort keyspaces alphabetically
         for keyspace_name in sorted(cluster_meta.keyspaces.keys()):
             keyspace_meta = cluster_meta.keyspaces[keyspace_name]
             entities = []
             
-            # Add all tables (sorted)
             for table_name in sorted(keyspace_meta.tables.keys()):
                 entities.append({
                     'type': 'table',
                     'name': table_name
                 })
             
-            # Add all materialized views (sorted)
             for view_name in sorted(keyspace_meta.views.keys()):
                 entities.append({
                     'type': 'view',
@@ -546,7 +414,22 @@ def get_schema():
                 'entities': entities
             })
         
-        return schema_tree
+        # Get connection information
+        vers = shell.connection_versions.copy()
+        connection_info = {
+            'cluster_name': shell.get_cluster_name(),
+            'host': shell.hostname,
+            'port': shell.port,
+            'cql_version': shell.cql_version,
+            'cassandra_version': vers.get('build', 'unknown'),
+            'protocol_version': vers.get('protocol', 'unknown'),
+            'cqlsh_version': cqlsh_version,
+        }
+        
+        return {
+            'connection': connection_info,
+            'schema': schema_tree
+        }
     
     except Exception as e:
         import traceback
@@ -567,15 +450,12 @@ def disconnect():
             shell.conn.shutdown()
         del shells[session_id]
     
-    paging_states.pop(session_id, None)
-    
     return {'status': 'disconnected'}
 
 
 if __name__ == '__main__':
     print("Starting Flask CQLSH API on 0.0.0.0:5000")
     
-    # Auto-connect if environment variables are set
     if AUTO_CONNECT:
         print("Auto-connecting using environment variables...")
         try:
@@ -592,7 +472,6 @@ if __name__ == '__main__':
                 print(f"Using keyspace: {shell.current_keyspace}")
         except Exception as e:
             print(f"Failed to auto-connect: {e}")
-            import sys
             sys.exit(1)
     else:
         print("No CASSANDRA_HOST environment variable set. Use /connect endpoint to connect.")

@@ -10,14 +10,13 @@ services:
       - CASSANDRA_USERNAME=cassandra
       - CASSANDRA_PASSWORD=cassandra
     ports:
-      - "8002:80"
+      - "5001:5000"
     volumes:
       - ./src:/app
-      - ./lib:/lualib
     restart: unless-stopped
     init: true
   cassandra:
-    image: cassandra:3.11
+    image: cassandra:5.0.1
     container_name: cassandra_db
     hostname: cassandra
     environment:
