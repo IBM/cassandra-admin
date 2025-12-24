@@ -92,7 +92,7 @@ curl -X POST http://localhost:5001/api/execute \
   -H "Content-Type: application/json" \
   -d @- << 'EOF'
 {
-  "command": "DESCRIBE KEYSPACE mykeyspace;",
+  "command": "CONSISTENCY;",
   "session_id": "default"
 }
 EOF

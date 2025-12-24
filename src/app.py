@@ -175,9 +175,13 @@ def execute_cql(shell, command):
     shell._json_output = {}
     shell._text_output = []
     
-    # Capture stdout for commands that use print()
+    # Capture output by redirecting both sys.stdout and shell.query_out
     old_stdout = sys.stdout
-    sys.stdout = StringIO()
+    old_query_out = shell.query_out
+    output_capture = StringIO()
+    
+    sys.stdout = output_capture
+    shell.query_out = output_capture
     
     try:
         shell.statement.truncate(0)
@@ -185,14 +189,20 @@ def execute_cql(shell, command):
         shell.statement.write(command + '\n')
         shell.onecmd(shell.statement.getvalue())
         
-        printed_output = sys.stdout.getvalue()
-        if printed_output:
-            shell._text_output.append(printed_output.strip())
+        captured_output = output_capture.getvalue()
+        if captured_output:
+            shell._text_output.append(captured_output.strip())
+    except Exception as e:
+        # Restore outputs even on exception
+        sys.stdout = old_stdout
+        shell.query_out = old_query_out
+        raise
     finally:
         sys.stdout = old_stdout
+        shell.query_out = old_query_out
     
     # Build result from available data
-    result = {'last_query': command.strip() }
+    result = {'last_query': command.strip()}
     
     if shell._json_output:
         result.update(shell._json_output)
@@ -210,7 +220,6 @@ def execute_cql(shell, command):
 @app.route('/keyspace/')
 @app.route('/keyspace/<path:subpath>')
 def index(subpath=None):
-    """Serve the main HTML interface"""
     return send_from_directory('.', 'index.html')
 
 
@@ -242,103 +251,6 @@ if not AUTO_CONNECT:
         
         except Exception as e:
             return {'error': str(e)}, 500
-
-
-@app.route('/api/keyspace/<keyspace_name>/table/<table_name>', methods=['GET', 'POST', 'PUT', 'DELETE'])
-def table_operations(keyspace_name, table_name):
-    """Virtual endpoint for table operations"""
-    session_id = request.args.get('session_id', 'default')
-    
-    shell = shells.get(session_id)
-    if not shell:
-        return {'error': 'Not connected. Call /connect first'}, 400
-    
-    # Quote identifiers if they contain uppercase or special characters
-    def quote_identifier(name):
-        if name != name.lower() or not name.replace('_', '').isalnum():
-            return f'"{name}"'
-        return name
-    
-    quoted_keyspace = quote_identifier(keyspace_name)
-    quoted_table = quote_identifier(table_name)
-    
-    try:
-        if request.method == 'GET':
-            # SELECT query
-            where_clause = request.args.get('where', '')
-            limit = request.args.get('limit')
-            columns = request.args.get('columns', '*')
-            
-            # Build SELECT query with quoted identifiers
-            query = f"SELECT {columns} FROM {quoted_keyspace}.{quoted_table}"
-            if where_clause:
-                query += f" WHERE {where_clause}"
-            if limit:
-                query += f" LIMIT {limit}"
-            
-            result, has_error = execute_cql(shell, query)
-            if has_error:
-                return result, 400
-            return result
-        
-        elif request.method == 'POST':
-            # INSERT query
-            data = request.json or {}
-            
-            if not data:
-                return {'error': 'No data provided for INSERT'}, 400
-            
-            columns = ', '.join([quote_identifier(k) for k in data.keys()])
-            values = ', '.join([f"'{v}'" if isinstance(v, str) else str(v) for v in data.values()])
-            
-            query = f"INSERT INTO {quoted_keyspace}.{quoted_table} ({columns}) VALUES ({values})"
-            
-            result, has_error = execute_cql(shell, query)
-            if has_error:
-                return result, 400
-            return {'status': 'inserted', 'query': query}
-        
-        elif request.method == 'PUT':
-            # UPDATE query
-            data = request.json or {}
-            where_clause = request.args.get('where')
-            
-            if not data:
-                return {'error': 'No data provided for UPDATE'}, 400
-            if not where_clause:
-                return {'error': 'WHERE clause required for UPDATE'}, 400
-            
-            set_clause = ', '.join([f"{quote_identifier(k)} = '{v}'" if isinstance(v, str) else f"{quote_identifier(k)} = {v}" 
-                                   for k, v in data.items()])
-            
-            query = f"UPDATE {quoted_keyspace}.{quoted_table} SET {set_clause} WHERE {where_clause}"
-            
-            result, has_error = execute_cql(shell, query)
-            if has_error:
-                return result, 400
-            return {'status': 'updated', 'query': query}
-        
-        elif request.method == 'DELETE':
-            # DELETE query
-            where_clause = request.args.get('where')
-            
-            if not where_clause:
-                return {'error': 'WHERE clause required for DELETE'}, 400
-            
-            query = f"DELETE FROM {quoted_keyspace}.{quoted_table} WHERE {where_clause}"
-            
-            result, has_error = execute_cql(shell, query)
-            if has_error:
-                return result, 400
-            return {'status': 'deleted', 'query': query}
-    
-    except Exception as e:
-        import traceback
-        return {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }, 500
-
 
 @app.route('/api/execute', methods=['POST'])
 def execute():

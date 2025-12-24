@@ -8,13 +8,8 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>[x-cloak] { display: none !important; }</style>
-  <style>
-      body {
-      font-size: 0.875rem !important;
-      }
-  </style>
 </head>
-<body :data-bs-theme="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'">
+<body :data-bs-theme="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'" style="font-size: 0.875rem;">
   <div x-data="main()">
     <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 11000;">
       <template x-for="toast in visibleToasts" :key="toast.id">
@@ -43,16 +38,14 @@
     <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }"
       style="height: 100vh;">
       <nav class="col-lg-2 col-md-3 d-md-block h-100 overflow-auto sidebar position-relative border-end vh-100">
-        <div
-          class="p-3 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
+        <div class="p-2 px-4 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
           <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis">Cassandra Admin</a>
           <div>
             <button x-data
               @click="darkMode = darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'"
               class="btn btn-link btn-sm float-end text-body-emphasis"
               :title="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'Switch to Light Mode' : 'Switch to Dark Mode'">
-              <i class="bi"
-                :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
+              <i class="bi" :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
             </button>
           </div>
         </div>
@@ -77,9 +70,7 @@
                 </button>
                 <div class="dropdown ms-auto" style="flex-shrink: 0;"
                   x-show="showKeyspaceActions || (selected.keyspace === ks.keyspace)" x-cloak>
-                  <a href="#" class="text-decoration-none text-center px-2" style="width: 30px; color: inherit;"
-                    data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="keyspaceDropdownOpen = true"
-                    @click.outside="keyspaceDropdownOpen = false; showKeyspaceActions = false">
+                  <a href="#" class="text-decoration-none text-center small px-2" style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="keyspaceDropdownOpen = true" @click.outside="keyspaceDropdownOpen = false; showKeyspaceActions = false">
                     <i class="bi bi-three-dots"></i>
                   </a>
                   <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
@@ -112,10 +103,7 @@
                     <div class="dropdown" style="flex-shrink: 0;"
                       x-show="showEntityActions || (selected.keyspace === ks.keyspace && selected.entity === entity.name)"
                       x-cloak>
-                      <a href="javascript:void(0)" class="text-decoration-none text-center px-3"
-                        style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false"
-                        @click.prevent="entityDropdownOpen = true"
-                        @click.outside="entityDropdownOpen = false; showEntityActions = false">
+                      <a href="javascript:void(0)" class="text-decoration-none text-center px-2" style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="entityDropdownOpen = true" @click.outside="entityDropdownOpen = false; showEntityActions = false">
                         <i class="bi bi-three-dots"></i>
                       </a>
                       <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
@@ -159,10 +147,9 @@
             x-text="selected.entity ? 'Loading ' + selected.entityType + ' ' + selected.entity + '...' : 'Loading...'"></span>
         </div>
         <div x-show="!entityLoading && entityData">
-          <template x-if="entityData && entityData.column_metadata && entityData.column_metadata.length > 0">
             <div class="d-flex flex-column small vh-100">
               <div
-                class="top-0 start-0 bg-body-tertiary w-100 p-2 border-top d-flex flex-shrink-0 justify-content-between align-items-center">
+                class="top-0 start-0 bg-body-tertiary w-100 p-2 d-flex flex-shrink-0 justify-content-between align-items-center">
                 <div class="flex-fill me-2">
                   <textarea class="form-control form-control-sm font-monospace"
                     placeholder="Enter CQL query and press Cmd+Enter to execute..." rows="1" x-model="cqlQuery"
@@ -173,7 +160,13 @@
                   <i class="bi bi-play-fill"></i> Execute
                 </button>
               </div>
-              <div class="table-responsive flex-fill overflow-y-auto">
+              <template x-if="entityData && entityData.output">
+                <div class="p-3 overflow-auto" style="height: calc(100vh - 60px);">
+                  <pre class="bg-body-secondary p-3 rounded font-monospace small" x-text="entityData.output"></pre>
+                </div>
+              </template>
+              <template x-if="entityData && entityData.column_metadata && entityData.column_metadata.length > 0">
+              <div class="table-responsive flex-fill overflow-y-auto" >
                 <table class="table table-striped table-hover table-bordered text-nowrap" style="margin-left: -1px;">
                   <thead class="text-nowrap"
                     :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'table-dark' : 'table-light'">
@@ -209,16 +202,15 @@
                   </tbody>
                 </table>
               </div>
-              <template x-if="!entityData.rows || entityData.rows.length === 0">
-                <div
-                  class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
+              </template>
+              <template x-if="entityData && entityData.column_metadata && entityData.rows.length === 0">
+                <div class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
                   <i class="bi bi bi-inbox fs-1 mb-3 text-secondary"></i>
                   <h4 class="text-secondary text-center user-select-none">No rows to show</h4>
                 </div>
               </template>
               <!-- Pagination Footer -->
-              <div
-                class="bottom-0 start-0 bg-body-tertiary w-100 p-2 border-top d-flex flex-shrink-0 justify-content-between align-items-center">
+              <div class="bottom-0 start-0 bg-body-tertiary w-100 p-2 border-top d-flex flex-shrink-0 justify-content-between align-items-center">
                 <div>
                   Showing <span x-text="entityData.rows ? entityData.rows.length : 0"></span> rows
                   <span x-show="pagination.currentPage > 1" x-text="' (Page ' + pagination.currentPage + ')'"></span>
@@ -243,7 +235,6 @@
                 </div>
               </div>
             </div>
-          </template>
         </div>
         <template x-if="!entityData && !entityLoading">
           <div
@@ -422,41 +413,26 @@
           }
         },
 
+        needsQuoting(name) {
+          return !/^[a-z_][a-z0-9_]*$/.test(name);
+        },
+
+        quoteIdentIfNeeded(name) {
+          if (this.needsQuoting(name)) {
+            return `"${name.replace(/"/g, '""')}"`;
+          }
+          return name;
+        },
+
         async loadEntity(keyspace, entity, entityType, resetPagination = true) {
           this.selected = { keyspace, entity, entityType };
-          this.entityLoading = true;
 
-          if (resetPagination) {
-            this.resetPagination();
-          }
+          const cql = `SELECT * FROM ${this.quoteIdentIfNeeded(keyspace)}.${this.quoteIdentIfNeeded(entity)}`;
 
-          window.history.pushState(
-            { keyspace, entity, entityType },
-            '',
-            `/keyspace/${keyspace}/${entityType}/${entity}`
-          );
-
-          try {
-            const currentPagingState = this.getCurrentPagingState();
-            const url = new URL(`/api/keyspace/${keyspace}/${entityType}/${entity}`, window.location.origin);
-            url.searchParams.append('page_size', this.pageSize);
-            if (currentPagingState) {
-              url.searchParams.append('paging_state', currentPagingState);
-            }
-
-            const data = await this.fetchResponse(url);
-            this.entityData = data;
-            this.pagination.hasMorePages = data.has_more_pages || false;
-            this.cqlQuery = data.last_query;
-
-            if (data.paging_state && data.has_more_pages) {
-              this.storeNextPagingState(data.paging_state);
-            }
-          } catch (error) {
-            console.error('Load entity failed:', error);
-          } finally {
-            this.entityLoading = false;
-          }
+          await this.executeCQLQuery(cql, {
+            resetPagination,
+            updateSelection: false
+          });
         },
 
         handleEntityAction(entityType, keyspace, entity, actionId) {
@@ -592,40 +568,54 @@
           }
         },
 
-        async executeCQLQuery(resetPagination = true) {
-          if (!this.cqlQuery || !this.cqlQuery.trim()) return;
+        async executeCQLQuery(cql = this.cqlQuery, { resetPagination = true, updateSelection = true } = {}) {
+          if (!cql || !cql.trim()) return;
 
           this.entityLoading = true;
 
           try {
+            const pagingState = this.getCurrentPagingState();
+
+            const payload = {
+              command: cql,
+              page_size: this.pageSize
+            };
+
+            if (pagingState) {
+              payload.paging_state = pagingState;
+            }
+
             const response = await this.fetchResponse('/api/execute', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ command: this.cqlQuery })
+              body: JSON.stringify(payload)
             });
 
             if (resetPagination) {
               this.resetPagination();
             }
 
+            // 🔹 Normalize result for table view
             this.entityData = {
               ...response,
-              last_query: response.query
+              last_query: cql
             };
 
+            this.cqlQuery = cql;
             this.pagination.hasMorePages = response.has_more_pages || false;
 
             if (response.paging_state && response.has_more_pages) {
               this.storeNextPagingState(response.paging_state);
             }
 
-            this.selected = {
-              keyspace: response.keyspace || null,
-              entity: response.table || null,
-              entityType: response.table ? 'table' : null
-            };
+            // 🔹 Update sidebar selection + URL (only when desired)
+            if (updateSelection && response.keyspace && response.table) {
+              this.selected = {
+                keyspace: response.keyspace,
+                entity: response.table,
+                entityType: 'table'
+              };
 
-            if (response.keyspace && response.table) {
               window.history.pushState(
                 {
                   keyspace: response.keyspace,
@@ -637,8 +627,11 @@
               );
             }
 
+            return response;
+
           } catch (error) {
             console.error('CQL execution failed:', error);
+            throw error;
           } finally {
             this.entityLoading = false;
           }
