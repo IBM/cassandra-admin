@@ -31,13 +31,12 @@
       <div
         class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
         <i class="bi bi bi-exclamation-triangle-fill fs-1 mb-3 text-secondary"></i>
-        <h4 class="text-secondary text-center user-select-none">Could not fetch Cassandra schema. Please check your
-          connection settings.</h4>
+        <h4 class="text-secondary text-center user-select-none">Could not fetch Cassandra schema. Please check your connection settings.</h4>
       </div>
     </template>
     <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }"
       style="height: 100vh;">
-      <nav class="col-lg-2 col-md-3 d-md-block h-100 overflow-auto sidebar position-relative border-end vh-100">
+      <nav class="border-end col-lg-2 col-md-3 d-flex flex-column h-100 overflow-auto position-relative sidebar vh-100">
         <div class="p-2 px-4 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
           <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis">Cassandra Admin</a>
           <div>
@@ -75,6 +74,12 @@
                   </a>
                   <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
                     <li>
+                      <a class="dropdown-item small" href="javascript:void(0)"
+                        @click.prevent="handleEntityAction('keyspace', ks.keyspace, ks.keyspace, 'export')">
+                        <i class="bi bi-download me-2"></i>Export Keyspace
+                      </a>
+                    </li>
+                    <li>
                       <a class="dropdown-item small text-danger" href="javascript:void(0)"
                         @click.prevent="handleEntityAction('keyspace', ks.keyspace, ks.keyspace, 'drop')">
                         <i class="bi bi-trash me-2"></i>Drop Keyspace
@@ -85,58 +90,70 @@
               </div>
               <ul class="list-unstyled collapse mb-1" :id="'collapse-' + ks.keyspace"
                 :class="{ 'show': selected.keyspace === ks.keyspace }">
-                <template x-for="entity in ks.entities" :key="entity.type + '-' + entity.name">
-                  <li class="nav-item d-flex rounded align-items-center position-relative fw-medium small"
-                    :class="{ 'bg-black text-white ': selected.keyspace === ks.keyspace && selected.entity === entity.name }"
-                    x-data="{ showEntityActions: false, entityDropdownOpen: false }"
-                    @mouseenter="showEntityActions = true"
-                    @mouseleave="if (!entityDropdownOpen) showEntityActions = false">
-                    <a :href="'/keyspace/' + ks.keyspace + '/' + entity.type + '/' + entity.name"
-                      @click.prevent="loadEntity(ks.keyspace, entity.name, entity.type)"
-                      class="d-flex flex-fill ps-4 py-1 text-decoration-none overflow-hidden text-nowrap"
-                      style="color: inherit;">
-                      <i class="bi pe-1"
-                        :class="entity.type === 'table' ? 'bi-table' : entity.type === 'view' ? 'bi-eye' : 'bi-diagram-3'"
-                        class="pe-1"></i>
-                      <span class="text-truncate" x-text="entity.name" :title="entity.name"></span>
-                    </a>
-                    <div class="dropdown" style="flex-shrink: 0;"
-                      x-show="showEntityActions || (selected.keyspace === ks.keyspace && selected.entity === entity.name)"
-                      x-cloak>
-                      <a href="javascript:void(0)" class="text-decoration-none text-center px-2" style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="entityDropdownOpen = true" @click.outside="entityDropdownOpen = false; showEntityActions = false">
-                        <i class="bi bi-three-dots"></i>
-                      </a>
-                      <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
-                        <template x-for="action in entityTypes[entity.type].actions" :key="action">
-                          <li>
-                            <a class="dropdown-item small" :class="actions[action].isDangerous ? 'text-danger' : ''"
-                              href="javascript:void(0)"
-                              @click.prevent="handleEntityAction(entity.type, ks.keyspace, entity.name, action)">
-                              <i class="bi me-2" :class="actions[action].icon"></i>
-                              <span x-text="actions[action].label"></span>
-                            </a>
-                          </li>
-                        </template>
-                      </ul>
-                    </div>
+                
+                <!-- Iterate over entity groups (Tables, Views, Triggers, Functions) -->
+                <template x-for="group in ks.groups" :key="group.label">
+                  <li class="mb-2">
+                    <!-- Subgroup Header -->
+                    <div class="px-4 py-1 text-muted fw-bold text-uppercase" style="font-size: 0.65rem; letter-spacing: 0.5px;" x-text="group.label"></div>
+                    
+                    <ul class="list-unstyled">
+                      <!-- Group Entities -->
+                      <template x-for="entity in group.entities" :key="entity.type + '-' + entity.name">
+                        <li class="nav-item d-flex rounded align-items-center position-relative fw-medium small"
+                          :class="{ 'bg-black text-white ': selected.keyspace === ks.keyspace && selected.entity === entity.name }"
+                          x-data="{ showEntityActions: false, entityDropdownOpen: false }"
+                          @mouseenter="showEntityActions = true"
+                          @mouseleave="if (!entityDropdownOpen) showEntityActions = false">
+                          
+                          <a :href="'/keyspace/' + ks.keyspace + '/' + entity.type + '/' + entity.name"
+                            @click.prevent="loadEntity(ks.keyspace, entity.name, entity.type)"
+                            class="d-flex flex-fill ps-4 py-1 text-decoration-none overflow-hidden text-nowrap"
+                            style="color: inherit;">
+                            <!-- Dynamic Icon Based on Entity Type -->
+                            <i class="bi pe-2"
+                              :class="{
+                                'bi-table': entity.type === 'table',
+                                'bi-eye': entity.type === 'view',
+                                'bi-lightning-charge': entity.type === 'trigger',
+                                'bi-code-slash': entity.type === 'function',
+                                'bi-braces': entity.type === 'type'
+                              }"></i>
+                            <span class="text-truncate" x-text="entity.name" :title="entity.name"></span>
+                          </a>
+
+                          <!-- Actions Dropdown (Only appears if the entity type has actions assigned) -->
+                          <template x-if="entityTypes[entity.type] && entityTypes[entity.type].actions && entityTypes[entity.type].actions.length > 0">
+                            <div class="dropdown" style="flex-shrink: 0;"
+                              x-show="showEntityActions || (selected.keyspace === ks.keyspace && selected.entity === entity.name)"
+                              x-cloak>
+                              <a href="javascript:void(0)" class="text-decoration-none text-center px-2" style="width: 30px; color: inherit;" data-bs-toggle="dropdown" aria-expanded="false" @click.prevent="entityDropdownOpen = true" @click.outside="entityDropdownOpen = false; showEntityActions = false">
+                                <i class="bi bi-three-dots"></i>
+                              </a>
+                              <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
+                                <template x-for="action in entityTypes[entity.type].actions" :key="action">
+                                  <li>
+                                    <a class="dropdown-item small" :class="actions[action].isDangerous ? 'text-danger' : ''"
+                                      href="javascript:void(0)"
+                                      @click.prevent="handleEntityAction(entity.type, ks.keyspace, entity.name, action)">
+                                      <i class="bi me-2" :class="actions[action].icon"></i>
+                                      <span x-text="actions[action].label"></span>
+                                    </a>
+                                  </li>
+                                </template>
+                              </ul>
+                            </div>
+                          </template>
+                          
+                        </li>
+                      </template>
+                    </ul>
                   </li>
                 </template>
               </ul>
             </div>
           </template>
         </div>
-        <div class="p-3 bg-body-tertiary border-top position-fixed bottom-0 z-2 mb-0">
-          <div class="small text-body-secondary">
-            <div class="text-muted small">Connection Information:
-              <div><strong x-text="connection ? connection.hosts.join(', ') : ''"></strong></div>
-              <div>Cassandra Version: <strong x-text="connection ? connection.cassandra_version : ''"></strong></div>
-              <div>Cluster Name: <strong x-text="connection ? connection.cluster_name : ''"></strong></div>
-              <div>CQL Version: <strong x-text="connection ? connection.cql_version : ''"></strong></div>
-              <div>Host: <strong x-text="connection ? connection.host : ''"></strong></div>
-              <div>Port: <strong x-text="connection ? connection.port : ''"></strong></div>
-              <div>Protocol Version: <strong x-text="connection ? connection.protocol_version : ''"></strong></div>
-              <div>CQLSH Version: <strong x-text="connection ? connection.cqlsh_version : ''"></strong></div>
-          </div>
       </nav>
       <!-- Main Content -->
       <main class="col-md-9 ms-sm-auto col-lg-10 overflow-auto vh-100 shadow position-relative">
@@ -241,6 +258,16 @@
             class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
             <i class="bi bi bi-database-fill fs-1 mb-3 text-secondary"></i>
             <h4 class="text-secondary text-center user-select-none">Select an item from the sidebar</h4>
+            <div class="text-muted small">Connection Information:
+              <div><strong x-text="connection ? connection.hosts.join(', ') : ''"></strong></div>
+              <div>Cassandra Version: <strong x-text="connection ? connection.cassandra_version : ''"></strong></div>
+              <div>Cluster Name: <strong x-text="connection ? connection.cluster_name : ''"></strong></div>
+              <div>CQL Version: <strong x-text="connection ? connection.cql_version : ''"></strong></div>
+              <div>Host: <strong x-text="connection ? connection.host : ''"></strong></div>
+              <div>Port: <strong x-text="connection ? connection.port : ''"></strong></div>
+              <div>Protocol Version: <strong x-text="connection ? connection.protocol_version : ''"></strong></div>
+              <div>CQLSH Version: <strong x-text="connection ? connection.cqlsh_version : ''"></strong></div>
+            </div>
           </div>
         </template>
       </main>
@@ -286,27 +313,42 @@
         <div class="modal-content small">
           <form id="exportForm" method="POST" target="_blank">
             <div class="modal-body">
-              <p>Export <span x-text="modalData.entityType ? modalData.entityType : ''"></span> <strong
-                  x-text="modalData.keyspace + '.' + modalData.entity"></strong> as:</p>
-              <div class="mb-3">
-                <label for="exportFormat" class="form-label">Format</label>
-                <select id="exportFormat" name="format" class="form-select form-select-sm">
-                  <template x-for="(fmt, index) in exportFormats[modalData.entityType]" :key="fmt">
-                    <option :value="fmt" x-text="fmt.toUpperCase()" :selected="index === 0"></option>
-                  </template>
-                </select>
-              </div>
-              <div class="mb-3">
-                <label for="exportLimit" class="form-label">Row Limit (0 for all)</label>
-                <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm" value="0"
-                  min="0">
-              </div>
-              <div class="form-check" x-show="modalData.entityType === 'table'" x-cloak>
-                <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL" checked>
-                <label class="form-check-label" for="includeDDL">
-                  Include 'CREATE' statement
-                </label>
-              </div>
+              <p>Export 
+                <span x-text="modalData.entityType ? modalData.entityType : ''"></span> 
+                <strong x-text="modalData.keyspace + (modalData.entityType !== 'keyspace' ? '.' + modalData.entity : '')"></strong>
+              </p>
+              <!-- Table / View Export Options -->
+              <template x-if="modalData.entityType !== 'keyspace'">
+                <div>
+                  <div class="mb-3">
+                    <label for="exportFormat" class="form-label">Format</label>
+                    <select id="exportFormat" name="format" class="form-select form-select-sm">
+                      <template x-for="(fmt, index) in exportFormats[modalData.entityType]" :key="fmt">
+                        <option :value="fmt" x-text="fmt.toUpperCase()" :selected="index === 0"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div class="mb-3">
+                    <label for="exportLimit" class="form-label">Row Limit (0 for all)</label>
+                    <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm" value="0" min="0">
+                  </div>
+                  <div class="form-check" x-show="modalData.entityType === 'table'" x-cloak>
+                    <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL" checked>
+                    <label class="form-check-label" for="includeDDL">
+                      Include 'CREATE' statement
+                    </label>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Keyspace Export Options -->
+              <template x-if="modalData.entityType === 'keyspace'">
+                <div class="alert alert-info py-2 mb-0 small">
+                  <i class="bi bi-info-circle me-1"></i>
+                  This will export the entire schema (tables, types, functions, etc.) for the keyspace as a CQL script, matching the output of the <code>DESCRIBE KEYSPACE</code> command. No table data will be included.
+                  <input type="hidden" name="format" value="cql">
+                </div>
+              </template>
             </div>
             <div class="modal-footer p-1">
               <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -328,18 +370,11 @@
         },
 
         entityTypes: {
-          table: {
-            icon: 'bi-table',
-            label: 'Table',
-            exportFormats: ['cql', 'csv', 'json'],
-            actions: ['export', 'truncate', 'drop']
-          },
-          view: {
-            icon: 'bi-eye',
-            label: 'View',
-            exportFormats: ['csv', 'json'],
-            actions: ['export', 'drop']
-          }
+          table: { icon: 'bi-table', label: 'Table', exportFormats: ['cql', 'csv', 'json'], actions: ['export', 'truncate', 'drop'] },
+          view: { icon: 'bi-eye', label: 'View', exportFormats: ['csv', 'json'], actions: ['export', 'drop'] },
+          trigger: { icon: 'bi-lightning-charge', label: 'Trigger', exportFormats: [], actions: ['drop'] },
+          function: { icon: 'bi-code-slash', label: 'Function', exportFormats: [], actions: ['drop'] },
+          type: { icon: 'bi-braces', label: 'Type', exportFormats: [], actions: ['drop'] } // <-- Add this
         },
         connection: null,
         entityData: null,
@@ -355,6 +390,7 @@
         visibleToasts: [],
 
         exportFormats: {
+          keyspace: ['cql'],
           table: ['cql', 'csv', 'json'],
           view: ['csv', 'json']
         },
@@ -427,7 +463,16 @@
         async loadEntity(keyspace, entity, entityType, resetPagination = true) {
           this.selected = { keyspace, entity, entityType };
 
-          const cql = `SELECT * FROM ${this.quoteIdentIfNeeded(keyspace)}.${this.quoteIdentIfNeeded(entity)}`;
+          let cql;
+          const quotedKs = this.quoteIdentIfNeeded(keyspace);
+          const quotedEntity = this.quoteIdentIfNeeded(entity);
+
+          // Tables and views get queried; everything else gets described
+          if (entityType === 'table' || entityType === 'view') {
+            cql = `SELECT * FROM ${quotedKs}.${quotedEntity}`;
+          } else {
+            cql = `DESCRIBE ${entityType.toUpperCase()} ${quotedKs}.${quotedEntity}`;
+          }
 
           await this.executeCQLQuery(cql, {
             resetPagination,
@@ -436,14 +481,20 @@
         },
 
         handleEntityAction(entityType, keyspace, entity, actionId) {
-          const action = this.actions[actionId];
+          const action = this.actions[actionId] || (actionId === 'export' ? this.actions.export : null);
           if (!action) return;
 
           this.modalData = { keyspace, entity, entityType };
 
           if (actionId === 'export') {
             const form = document.getElementById('exportForm');
-            form.action = `/api/${entityType}/${keyspace}/${entity}/export`;
+            
+            if (entityType === 'keyspace') {
+              form.action = `/api/keyspaces/${keyspace}/export`;
+            } else {
+              form.action = `/api/keyspaces/${keyspace}/${entityType}s/${entity}/export`;
+            }
+            
             new bootstrap.Modal(document.getElementById('export_modal')).show();
           } else if (actionId === 'truncate') {
             new bootstrap.Modal(document.getElementById('truncate_modal')).show();
@@ -484,31 +535,28 @@
         async previousPage() {
           if (!this.canGoPrevious()) return;
           this.pagination.currentPage--;
-          await this.loadEntity(this.selected.keyspace, this.selected.entity, this.selected.entityType, false);
+          
+          if (this.entityData?.last_query) {
+            await this.executeCQLQuery(this.entityData.last_query, { resetPagination: false, updateSelection: false });
+          }
         },
 
         async nextPage() {
           if (!this.canGoNext()) return;
-
           this.pagination.currentPage++;
 
-          if (this.entityData?.query) {
-            await this.executeCQLQuery(false);
-          } else {
-            await this.loadEntity(
-              this.selected.keyspace,
-              this.selected.entity,
-              this.selected.entityType,
-              false
-            );
+          // Using 'last_query' fixes the bug where turning pages on a custom query 
+          // would accidentally reset the view to 'SELECT * FROM table'
+          if (this.entityData?.last_query) {
+            await this.executeCQLQuery(this.entityData.last_query, { resetPagination: false, updateSelection: false });
           }
         },
 
-
         async changePageSize() {
-          await this.loadEntity(this.selected.keyspace, this.selected.entity, this.selected.entityType, true);
+          if (this.entityData?.last_query) {
+            await this.executeCQLQuery(this.entityData.last_query, { resetPagination: true, updateSelection: false });
+          }
         },
-
         restoreFromURL() {
           const pathParts = window.location.pathname.split('/').filter(part => part);
           if (pathParts.length === 4 && pathParts[0] === 'keyspace') {
@@ -595,7 +643,7 @@
               this.resetPagination();
             }
 
-            // 🔹 Normalize result for table view
+            // Normalize result for table view
             this.entityData = {
               ...response,
               last_query: cql
@@ -608,7 +656,7 @@
               this.storeNextPagingState(response.paging_state);
             }
 
-            // 🔹 Update sidebar selection + URL (only when desired)
+            // Update sidebar selection + URL (only when desired)
             if (updateSelection && response.keyspace && response.table) {
               this.selected = {
                 keyspace: response.keyspace,
@@ -664,5 +712,4 @@
 
   </script>
 </body>
-
 </html>

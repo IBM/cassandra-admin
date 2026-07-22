@@ -1,5 +1,5 @@
-1. Paging state not working
-2. Serialize complex types in UI
+1. Paging state not working [OK]
+2. Serialize complex types in UI 
 3. Add 'TRACING' support
 4. Add 'CONSISTENCY' support
 5. Add download/upload support (COPY)
@@ -27,3 +27,4 @@ INSERT INTO mykeyspace.users JSON '{
 15. Enriched display (and editing) of complex types in UI (user-configurable?)
 16. When doing CREATE|TRUNCATE|INSERT|UPDATE, update UI
 17. Risky query detection
+18. Add healthcheck to init.sh to wait for cassandra DB

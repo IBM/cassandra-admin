@@ -1,6 +1,7 @@
-from flask import Flask, request, send_from_directory
+import csv
 import sys
 import os
+from flask import Flask, Response, request, send_from_directory
 from io import StringIO
 sys.path.insert(0, '/opt/cassandra/pylib')
 from cqlshlib.cqlshmain import Shell, version as cqlsh_version
@@ -158,23 +159,39 @@ def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keys
         pass
     
     shell = Shell(**shell_args)
-    
+
     shell._json_mode = True
     shell._json_output = {}
     
+    # 4. Patch execute_async to inject paging_state when present
+    original_execute_async = shell.session.execute_async
+    def execute_async_with_paging(statement, *args, **kwargs):
+        paging_state = getattr(shell, '_current_paging_state', None)
+        if paging_state:
+            kwargs['paging_state'] = paging_state
+            shell._current_paging_state = None  # Consume it once so it doesn't affect subsequent queries
+        return original_execute_async(statement, *args, **kwargs)
+    
+    shell.session.execute_async = execute_async_with_paging
+
     return shell
 
 
-def execute_cql(shell, command):
+def execute_cql(shell, command, paging_state=None):
     """Execute a CQL command and return JSON result"""
-    
     if not command.strip().endswith(';'):
         command = command.strip() + ';'
     
+    # 3. Store it on the shell instance temporarily 
+    if paging_state:
+        shell._current_paging_state = bytes.fromhex(paging_state)
+    else:
+        shell._current_paging_state = None
+
     shell.statement_error = False
     shell._json_output = {}
     shell._text_output = []
-    
+
     # Capture output by redirecting both sys.stdout and shell.query_out
     old_stdout = sys.stdout
     old_query_out = shell.query_out
@@ -259,6 +276,7 @@ def execute():
     command = data.get('command')
     session_id = data.get('session_id', 'default')
     page_size = data.get('page_size')
+    paging_state = data.get('paging_state') # 1. Capture the paging_state
     
     if not command:
         return {'error': 'No command provided'}, 400
@@ -267,20 +285,20 @@ def execute():
     if not shell:
         return {'error': 'Not connected. Call /connect first'}, 400
     
-    # Set custom page size if provided
     original_page_size = None
     if page_size:
         original_page_size = shell.page_size
         shell.page_size = page_size
     
     try:
-        result, has_error = execute_cql(shell, command)
+        # 2. Pass the paging state into execute_cql
+        result, has_error = execute_cql(shell, command, paging_state)
         
         if has_error:
             return result, 400
         
         return result
-    
+        
     except Exception as e:
         import traceback
         return {
@@ -294,7 +312,7 @@ def execute():
 
 @app.route('/api/schema', methods=['GET'])
 def get_schema():
-    """Get full schema tree of keyspaces, tables, and views"""
+    """Get full schema tree of keyspaces, grouped by entity type"""
     session_id = request.args.get('session_id', 'default')
     
     shell = shells.get(session_id)
@@ -307,27 +325,66 @@ def get_schema():
         
         for keyspace_name in sorted(cluster_meta.keyspaces.keys()):
             keyspace_meta = cluster_meta.keyspaces[keyspace_name]
-            entities = []
+            groups = []
             
-            for table_name in sorted(keyspace_meta.tables.keys()):
-                entities.append({
-                    'type': 'table',
-                    'name': table_name
-                })
+            # 1. Tables
+            tables = [{'type': 'table', 'name': t} for t in sorted(keyspace_meta.tables.keys())]
+            if tables:
+                groups.append({'label': 'Tables', 'entities': tables})
             
-            for view_name in sorted(keyspace_meta.views.keys()):
-                entities.append({
-                    'type': 'view',
-                    'name': view_name
-                })
+            # 2. Views
+            views = [{'type': 'view', 'name': v} for v in sorted(keyspace_meta.views.keys())]
+            if views:
+                groups.append({'label': 'Views', 'entities': views})
+                
+            # 3. Triggers
+            triggers = []
+            for table in keyspace_meta.tables.values():
+                if hasattr(table, 'triggers'):
+                    for trigger_name in table.triggers.keys():
+                        triggers.append({'type': 'trigger', 'name': trigger_name})
+            
+            if triggers:
+                triggers = sorted(triggers, key=lambda x: x['name'])
+                groups.append({'label': 'Triggers', 'entities': triggers})
+                
+            # 4. Functions
+            functions = []
+            if hasattr(keyspace_meta, 'functions'):
+                for f in keyspace_meta.functions.values():
+                    functions.append({'type': 'function', 'name': f.name})
+                    
+            if functions:
+                # Deduplicate overloaded functions (same name, different signatures)
+                unique_functions = {f['name']: f for f in functions}.values()
+                sorted_functions = sorted(unique_functions, key=lambda x: x['name'])
+                groups.append({'label': 'Functions', 'entities': sorted_functions})
             
             schema_tree.append({
                 'keyspace': keyspace_name,
-                'entities': entities
+                'groups': groups  # Replaces the old flat 'entities' list
+            })
+
+
+            # 5. Types
+            types = []
+            if hasattr(keyspace_meta, 'user_types'):
+                for type_name in keyspace_meta.user_types.keys():
+                    types.append({'type': 'type', 'name': type_name})
+                    
+            if types:
+                sorted_types = sorted(types, key=lambda x: x['name'])
+                groups.append({'label': 'Types', 'entities': sorted_types})
+            
+            schema_tree.append({
+                'keyspace': keyspace_name,
+                'groups': groups  
             })
         
         # Get connection information
         vers = shell.connection_versions.copy()
+        from cqlshlib.cqlshmain import version as cqlsh_version
+        
         connection_info = {
             'cluster_name': shell.get_cluster_name(),
             'host': shell.hostname,
@@ -364,6 +421,115 @@ def disconnect():
     
     return {'status': 'disconnected'}
 
+@app.route('/api/keyspaces/<keyspace>/<collection_type>/<entity>/export', methods=['POST'])
+def export_entity(keyspace, collection_type, entity):
+    """Export data from a table or view"""
+    # Map REST collection name back to entity type
+    entity_type = 'table' if collection_type == 'tables' else 'view'
+    
+    export_format = request.form.get('format', 'csv')
+    limit = int(request.form.get('limit', 0))
+    include_ddl = request.form.get('include_ddl') == '1'
+    
+    # Retrieve the default shell session 
+    # (If using multi-user sessions, pass session_id via a hidden form input)
+    shell = shells.get('default')
+    if not shell:
+        return "Not connected to Cassandra", 400
+        
+    # 1. Fetch DDL if requested
+    cql_ddl = ""
+    if include_ddl and export_format == 'cql' and entity_type == 'table':
+        ddl_res, _ = execute_cql(shell, f'DESCRIBE TABLE "{keyspace}"."{entity}";')
+        cql_ddl = ddl_res.get('output', '') + "\n\n"
+        
+    # 2. Fetch Data
+    query = f'SELECT * FROM "{keyspace}"."{entity}"'
+    if limit > 0:
+        query += f' LIMIT {limit}'
+        
+    # Temporarily increase page size to fetch the export payload 
+    # without breaking the user's UI pagination limits
+    original_page_size = shell.page_size
+    shell.page_size = limit if limit > 0 else 10000 
+    
+    try:
+        result, has_error = execute_cql(shell, query)
+    finally:
+        shell.page_size = original_page_size
+        
+    if has_error:
+        return result.get('output', 'Error executing export query'), 400
+        
+    rows = result.get('rows', [])
+    filename = f"{keyspace}_{entity}_export.{export_format}"
+    
+    # 3. Format Output
+    if export_format == 'json':
+        import json
+        content = json.dumps(rows, indent=2)
+        mimetype = 'application/json'
+        
+    elif export_format == 'csv':
+        output = StringIO()
+        if rows:
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        content = output.getvalue()
+        mimetype = 'text/csv'
+        
+    elif export_format == 'cql':
+        lines = [cql_ddl] if cql_ddl else []
+        for row in rows:
+            columns = ', '.join([f'"{k}"' for k in row.keys()])
+            values = []
+            for v in row.values():
+                if v is None or v == 'null':
+                    values.append('NULL')
+                else:
+                    # Escape single quotes for valid CQL strings
+                    escaped_v = str(v).replace("'", "''")
+                    values.append(f"'{escaped_v}'")
+                    
+            values_str = ', '.join(values)
+            lines.append(f'INSERT INTO "{keyspace}"."{entity}" ({columns}) VALUES ({values_str});')
+            
+        content = '\n'.join(lines)
+        mimetype = 'application/octet-stream'
+        
+    else:
+        return "Invalid export format", 400
+        
+    # Trigger browser file download
+    return Response(
+        content,
+        mimetype=mimetype,
+        headers={"Content-Disposition": f"attachment;filename={filename}"}
+    )
+
+@app.route('/api/keyspaces/<keyspace>/export', methods=['POST'])
+def export_keyspace(keyspace):
+    """Export an entire keyspace schema (equivalent to DESCRIBE KEYSPACE)"""
+    shell = shells.get('default')
+    if not shell:
+        return "Not connected to Cassandra", 400
+        
+    # Simply execute the DESCRIBE KEYSPACE command
+    result, has_error = execute_cql(shell, f'DESCRIBE KEYSPACE "{keyspace}";')
+    
+    if has_error:
+        return result.get('output', 'Error exporting keyspace schema'), 400
+        
+    # The 'output' key contains the exact string representation from the shell
+    content = result.get('output', '')
+    filename = f"{keyspace}_schema.cql"
+    
+    return Response(
+        content,
+        mimetype='application/octet-stream',
+        headers={"Content-Disposition": f"attachment;filename={filename}"}
+    )
 
 if __name__ == '__main__':
     print("Starting Flask CQLSH API on 0.0.0.0:5000")

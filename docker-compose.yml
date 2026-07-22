@@ -9,6 +9,7 @@ services:
       - CASSANDRA_HOST=cassandra_db
       - CASSANDRA_USERNAME=cassandra
       - CASSANDRA_PASSWORD=cassandra
+      - CQLSH_HOST=cassandra_db
     ports:
       - "5001:5000"
     volumes:
