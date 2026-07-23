@@ -1,6 +1,7 @@
 import csv
 import sys
 import os
+import re
 from flask import Flask, Response, request, send_from_directory
 from io import StringIO
 sys.path.insert(0, '/opt/cassandra/pylib')
@@ -16,6 +17,14 @@ app = Flask(__name__)
 shells = {}
 
 AUTO_CONNECT = os.getenv('CASSANDRA_HOST') is not None
+
+# Dictionary to hold metadata for actions that nodes can execute
+ACTION_DEF = {
+    'describe': {'name': 'describe', 'label': 'Describe', 'icon': 'bi-info-circle', 'isDangerous': False, 'title': 'Describe'},
+    'export': {'name': 'export', 'label': 'Export', 'icon': 'bi-download', 'isDangerous': False, 'title': 'Export'},
+    'truncate': {'name': 'truncate', 'label': 'Truncate', 'icon': 'bi-scissors', 'isDangerous': True, 'title': 'Truncate'},
+    'drop': {'name': 'drop', 'label': 'Drop', 'icon': 'bi-trash', 'isDangerous': True, 'title': 'Drop'}
+}
 
 def extract_column_metadata(column_names, table_meta):
     """Extract column metadata from table metadata"""
@@ -163,7 +172,7 @@ def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keys
     shell._json_mode = True
     shell._json_output = {}
     
-    # 4. Patch execute_async to inject paging_state when present
+    # Patch execute_async to inject paging_state when present
     original_execute_async = shell.session.execute_async
     def execute_async_with_paging(statement, *args, **kwargs):
         paging_state = getattr(shell, '_current_paging_state', None)
@@ -182,7 +191,6 @@ def execute_cql(shell, command, paging_state=None):
     if not command.strip().endswith(';'):
         command = command.strip() + ';'
     
-    # 3. Store it on the shell instance temporarily 
     if paging_state:
         shell._current_paging_state = bytes.fromhex(paging_state)
     else:
@@ -271,12 +279,12 @@ if not AUTO_CONNECT:
 
 @app.route('/api/execute', methods=['POST'])
 def execute():
-    """Execute CQL command"""
+    """Execute raw CQL commands"""
     data = request.json or {}
     command = data.get('command')
     session_id = data.get('session_id', 'default')
     page_size = data.get('page_size')
-    paging_state = data.get('paging_state') # 1. Capture the paging_state
+    paging_state = data.get('paging_state')
     
     if not command:
         return {'error': 'No command provided'}, 400
@@ -291,7 +299,6 @@ def execute():
         shell.page_size = page_size
     
     try:
-        # 2. Pass the paging state into execute_cql
         result, has_error = execute_cql(shell, command, paging_state)
         
         if has_error:
@@ -310,9 +317,48 @@ def execute():
         if original_page_size is not None:
             shell.page_size = original_page_size
 
+@app.route('/api/action', methods=['POST'])
+def handle_action():
+    """Handle server-side execution of drop and truncate actions"""
+    data = request.json or {}
+    action = data.get('action')
+    keyspace = data.get('keyspace')
+    entity_type = data.get('type')
+    entity = data.get('entity')
+    session_id = data.get('session_id', 'default')
+
+    shell = shells.get(session_id)
+    if not shell:
+        return {'error': 'Not connected. Call /connect first'}, 400
+
+    def quote_ident(name):
+        if not name: return ""
+        return f'"{name.replace(chr(34), chr(34)+chr(34))}"' if not re.match(r'^[a-z_][a-z0-9_]*$', name) else name
+
+    ks_q = quote_ident(keyspace)
+    ent_q = quote_ident(entity)
+
+    cql = ""
+    if action == 'drop':
+        if entity_type == 'keyspace':
+            cql = f"DROP KEYSPACE {ks_q};"
+        else:
+            cql = f"DROP {entity_type.upper()} {ks_q}.{ent_q};"
+    elif action == 'truncate':
+        cql = f"TRUNCATE {ks_q}.{ent_q};"
+    else:
+        return {'error': f'Unsupported action: {action}'}, 400
+
+    result, has_error = execute_cql(shell, cql)
+    if has_error:
+        return result, 400
+
+    return {'success': True, 'message': f"Action '{action}' executed successfully."}
+
+
 @app.route('/api/schema', methods=['GET'])
 def get_schema():
-    """Get full schema tree of keyspaces, grouped by entity type"""
+    """Get the top-level keyspaces only."""
     session_id = request.args.get('session_id', 'default')
     
     shell = shells.get(session_id)
@@ -320,71 +366,24 @@ def get_schema():
         return {'error': 'Not connected. Call /connect first'}, 400
     
     try:
-        schema_tree = []
+        keyspaces = []
         cluster_meta = shell.session.cluster.metadata
-        
         for keyspace_name in sorted(cluster_meta.keyspaces.keys()):
-            keyspace_meta = cluster_meta.keyspaces[keyspace_name]
-            groups = []
-            
-            # 1. Tables
-            tables = [{'type': 'table', 'name': t} for t in sorted(keyspace_meta.tables.keys())]
-            if tables:
-                groups.append({'label': 'Tables', 'entities': tables})
-            
-            # 2. Views
-            views = [{'type': 'view', 'name': v} for v in sorted(keyspace_meta.views.keys())]
-            if views:
-                groups.append({'label': 'Views', 'entities': views})
-                
-            # 3. Triggers
-            triggers = []
-            for table in keyspace_meta.tables.values():
-                if hasattr(table, 'triggers'):
-                    for trigger_name in table.triggers.keys():
-                        triggers.append({'type': 'trigger', 'name': trigger_name})
-            
-            if triggers:
-                triggers = sorted(triggers, key=lambda x: x['name'])
-                groups.append({'label': 'Triggers', 'entities': triggers})
-                
-            # 4. Functions
-            functions = []
-            if hasattr(keyspace_meta, 'functions'):
-                for f in keyspace_meta.functions.values():
-                    functions.append({'type': 'function', 'name': f.name})
-                    
-            if functions:
-                # Deduplicate overloaded functions (same name, different signatures)
-                unique_functions = {f['name']: f for f in functions}.values()
-                sorted_functions = sorted(unique_functions, key=lambda x: x['name'])
-                groups.append({'label': 'Functions', 'entities': sorted_functions})
-            
-            schema_tree.append({
+            keyspaces.append({
+                'id': f"ks_{keyspace_name}",
+                'label': keyspace_name,
+                'type': 'keyspace',
                 'keyspace': keyspace_name,
-                'groups': groups  # Replaces the old flat 'entities' list
+                'hasChildren': True,
+                'childrenLoaded': False,
+                'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['drop']],
+                'defaultClickAction': 'expand',
+                'isClickable': True,
+                'exportUrl': f"/api/keyspaces/{keyspace_name}/export"
             })
 
-
-            # 5. Types
-            types = []
-            if hasattr(keyspace_meta, 'user_types'):
-                for type_name in keyspace_meta.user_types.keys():
-                    types.append({'type': 'type', 'name': type_name})
-                    
-            if types:
-                sorted_types = sorted(types, key=lambda x: x['name'])
-                groups.append({'label': 'Types', 'entities': sorted_types})
-            
-            schema_tree.append({
-                'keyspace': keyspace_name,
-                'groups': groups  
-            })
-        
         # Get connection information
         vers = shell.connection_versions.copy()
-        from cqlshlib.cqlshmain import version as cqlsh_version
-        
         connection_info = {
             'cluster_name': shell.get_cluster_name(),
             'host': shell.hostname,
@@ -397,15 +396,138 @@ def get_schema():
         
         return {
             'connection': connection_info,
-            'schema': schema_tree
+            'schema': keyspaces
         }
-    
     except Exception as e:
         import traceback
-        return {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }, 500
+        return {'error': str(e), 'traceback': traceback.format_exc()}, 500
+
+# Resolvers
+def resolve_keyspace(ks_meta, args):
+    groups = []
+    ks = ks_meta.name
+    # Singularized the first value in these tuples (the 'group' identifier)
+    checks = [
+        ('table', 'Tables', lambda m: bool(m.tables)),
+        ('view', 'Views', lambda m: bool(m.views)),
+        ('type', 'Types', lambda m: hasattr(m, 'user_types') and bool(m.user_types)),
+        ('function', 'Functions', lambda m: hasattr(m, 'functions') and bool(m.functions)),
+        ('trigger', 'Triggers', lambda m: any(hasattr(t, 'triggers') and t.triggers for t in m.tables.values()))
+    ]
+    
+    for group_id, label, condition in checks:
+        if condition(ks_meta):
+            groups.append({
+                'id': f"{ks}_grp_{group_id}", 'label': label, 'type': 'group',
+                'group': group_id, 'keyspace': ks, 
+                'hasChildren': True, 'actions': [],
+                'defaultClickAction': 'expand', 'isClickable': True 
+            })
+    return groups
+
+def resolve_group(ks_meta, args):
+    group = args.get('group')
+    ks = ks_meta.name
+    
+    # Matches the new singular group keys
+    if group == 'table':
+      return [{
+          'id': f"{ks}_table_{t}", 'label': t, 'type': 'table', 'entity': t, 'keyspace': ks, 
+          'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['truncate'], ACTION_DEF['drop']], 
+          'defaultClickAction': 'select', 'isClickable': True,
+          'exportUrl': f"/api/keyspaces/{ks}/tables/{t}/export"
+      } for t in sorted(ks_meta.tables.keys())]
+    
+    elif group == 'view':
+        return [{
+            'id': f"{ks}_view_{v}", 'label': v, 'type': 'view', 'entity': v, 'keyspace': ks, 
+            'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['drop']], 
+            'defaultClickAction': 'select', 'isClickable': True,
+            'exportUrl': f"/api/keyspaces/{ks}/views/{v}/export"
+        } for v in sorted(ks_meta.views.keys())]
+
+    elif group == 'type':
+        if not hasattr(ks_meta, 'user_types'): return []
+        return [{'id': f"{ks}_type_{t}", 'label': t, 'type': 'type', 'entity': t, 'keyspace': ks, 'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for t in sorted(ks_meta.user_types.keys())]
+    
+    elif group == 'function':
+        if not hasattr(ks_meta, 'functions'): return []
+        unique_funcs = {f.name: f for f in ks_meta.functions.values()}.values()
+        return [{'id': f"{ks}_func_{f.name}", 'label': f.name, 'type': 'function', 'entity': f.name, 'keyspace': ks, 'hasChildren': False, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for f in sorted(unique_funcs, key=lambda x: x.name)]
+    
+    elif group == 'trigger':
+        triggers = {trg for t in ks_meta.tables.values() if hasattr(t, 'triggers') and t.triggers for trg in t.triggers.keys()}
+        return [{'id': f"{ks}_trigger_{trg}", 'label': trg, 'type': 'trigger', 'entity': trg, 'keyspace': ks, 'hasChildren': False, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for trg in sorted(triggers)]
+        
+    return []
+
+def resolve_entity_columns(ks_meta, args):
+    node_type = args.get('type')
+    entity = args.get('entity')
+    ks = ks_meta.name
+    
+    meta = ks_meta.tables.get(entity) if node_type == 'table' else ks_meta.views.get(entity)
+    if not meta: return []
+    
+    return [{
+        'id': f"{ks}_{node_type}_{entity}_col_{c}",
+        'label': f"{c} ({c_meta.cql_type})",
+        'type': 'column',
+        'keyspace': ks, 'entity': entity, 'column': c,
+        'hasChildren': False, 'actions': [],
+        'defaultClickAction': None, 'isClickable': False 
+    } for c, c_meta in meta.columns.items()]
+
+def resolve_type_fields(ks_meta, args):
+    entity = args.get('entity')
+    ks = ks_meta.name
+    
+    user_type = ks_meta.user_types.get(entity)
+    if not user_type: return []
+    
+    return [{
+        'id': f"{ks}_type_{entity}_field_{f}",
+        'label': f"{f} ({user_type.field_types[i]})",
+        'type': 'column', 
+        'keyspace': ks, 'entity': entity, 'column': f,
+        'hasChildren': False, 'actions': [],
+        'defaultClickAction': None, 'isClickable': False 
+    } for i, f in enumerate(user_type.field_names)]
+
+NODE_RESOLVERS = {
+    'keyspace': resolve_keyspace,
+    'group': resolve_group,
+    'table': resolve_entity_columns,
+    'view': resolve_entity_columns,
+    'type': resolve_type_fields
+}
+
+@app.route('/api/schema/children', methods=['GET'])
+def get_schema_children():
+    """Generic lazy-loading endpoint powered by the resolver registry."""
+    session_id = request.args.get('session_id', 'default')
+    node_type = request.args.get('type')
+    keyspace_name = request.args.get('keyspace')
+    
+    shell = shells.get(session_id)
+    if not shell:
+        return {'error': 'Not connected.'}, 400
+        
+    try:
+        ks_meta = shell.session.cluster.metadata.keyspaces.get(keyspace_name)
+        if not ks_meta:
+            return {'children': []}
+
+        resolver = NODE_RESOLVERS.get(node_type)
+        if not resolver:
+            return {'children': []}
+
+        children = resolver(ks_meta, request.args)
+        return {'children': children}
+        
+    except Exception as e:
+        import traceback
+        return {'error': str(e), 'traceback': traceback.format_exc()}, 500
 
 @app.route('/api/disconnect', methods=['POST'])
 def disconnect():
@@ -424,32 +546,24 @@ def disconnect():
 @app.route('/api/keyspaces/<keyspace>/<collection_type>/<entity>/export', methods=['POST'])
 def export_entity(keyspace, collection_type, entity):
     """Export data from a table or view"""
-    # Map REST collection name back to entity type
     entity_type = 'table' if collection_type == 'tables' else 'view'
-    
     export_format = request.form.get('format', 'csv')
     limit = int(request.form.get('limit', 0))
     include_ddl = request.form.get('include_ddl') == '1'
     
-    # Retrieve the default shell session 
-    # (If using multi-user sessions, pass session_id via a hidden form input)
     shell = shells.get('default')
     if not shell:
         return "Not connected to Cassandra", 400
         
-    # 1. Fetch DDL if requested
     cql_ddl = ""
     if include_ddl and export_format == 'cql' and entity_type == 'table':
         ddl_res, _ = execute_cql(shell, f'DESCRIBE TABLE "{keyspace}"."{entity}";')
         cql_ddl = ddl_res.get('output', '') + "\n\n"
         
-    # 2. Fetch Data
     query = f'SELECT * FROM "{keyspace}"."{entity}"'
     if limit > 0:
         query += f' LIMIT {limit}'
         
-    # Temporarily increase page size to fetch the export payload 
-    # without breaking the user's UI pagination limits
     original_page_size = shell.page_size
     shell.page_size = limit if limit > 0 else 10000 
     
@@ -464,7 +578,6 @@ def export_entity(keyspace, collection_type, entity):
     rows = result.get('rows', [])
     filename = f"{keyspace}_{entity}_export.{export_format}"
     
-    # 3. Format Output
     if export_format == 'json':
         import json
         content = json.dumps(rows, indent=2)
@@ -488,7 +601,6 @@ def export_entity(keyspace, collection_type, entity):
                 if v is None or v == 'null':
                     values.append('NULL')
                 else:
-                    # Escape single quotes for valid CQL strings
                     escaped_v = str(v).replace("'", "''")
                     values.append(f"'{escaped_v}'")
                     
@@ -501,7 +613,6 @@ def export_entity(keyspace, collection_type, entity):
     else:
         return "Invalid export format", 400
         
-    # Trigger browser file download
     return Response(
         content,
         mimetype=mimetype,
@@ -515,13 +626,11 @@ def export_keyspace(keyspace):
     if not shell:
         return "Not connected to Cassandra", 400
         
-    # Simply execute the DESCRIBE KEYSPACE command
     result, has_error = execute_cql(shell, f'DESCRIBE KEYSPACE "{keyspace}";')
     
     if has_error:
         return result.get('output', 'Error exporting keyspace schema'), 400
         
-    # The 'output' key contains the exact string representation from the shell
     content = result.get('output', '')
     filename = f"{keyspace}_schema.cql"
     
