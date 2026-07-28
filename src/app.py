@@ -1,14 +1,21 @@
 import csv
-import sys
+import json
 import os
 import re
-from flask import Flask, Response, request, send_from_directory
+import sys
+import traceback
+from functools import wraps
 from io import StringIO
-sys.path.insert(0, '/opt/cassandra/pylib')
-from cqlshlib.cqlshmain import Shell, version as cqlsh_version
+
+from flask import Flask, Response, request, send_from_directory
+
+sys.path.insert(0, "/opt/cassandra/pylib")
+from cqlshlib.cqlshmain import Shell
+from cqlshlib.cqlshmain import version as cqlsh_version
 
 try:
     from cqlshlib.cqlshmain import insert_driver_hooks
+
     insert_driver_hooks()
 except (ImportError, AttributeError):
     pass
@@ -16,651 +23,561 @@ except (ImportError, AttributeError):
 app = Flask(__name__)
 shells = {}
 
-AUTO_CONNECT = os.getenv('CASSANDRA_HOST') is not None
+
+# ==========================================
+# CONSTANTS
+# ==========================================
+
+# App Config
+APP_PORT = int(os.getenv("APP_PORT", 5000))
+APP_LISTEN = os.getenv("APP_LISTEN", "0.0.0.0")
+
+# Cassandra Config
+AUTO_CONNECT = os.getenv("CASSANDRA_HOST") is not None
+CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "127.0.0.1")
+CASSANDRA_PORT = int(os.getenv("CASSANDRA_PORT", "9042"))
+CASSANDRA_USERNAME = os.getenv("CASSANDRA_USERNAME")
+CASSANDRA_PASSWORD = os.getenv("CASSANDRA_PASSWORD")
+CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE")
 
 # Dictionary to hold metadata for actions that nodes can execute
 ACTION_DEF = {
-    'describe': {'name': 'describe', 'label': 'Describe', 'icon': 'bi-info-circle', 'isDangerous': False, 'title': 'Describe'},
-    'export': {'name': 'export', 'label': 'Export', 'icon': 'bi-download', 'isDangerous': False, 'title': 'Export'},
-    'truncate': {'name': 'truncate', 'label': 'Truncate', 'icon': 'bi-scissors', 'isDangerous': True, 'title': 'Truncate'},
-    'drop': {'name': 'drop', 'label': 'Drop', 'icon': 'bi-trash', 'isDangerous': True, 'title': 'Drop'}
+    "describe": {"name": "describe", "label": "Describe", "title": "Describe", "icon": "bi-info-circle", "isDangerous": False},
+    "export": {"name": "export", "label": "Export", "title": "Export", "icon": "bi-download", "isDangerous": False},
+    "truncate": {"name": "truncate", "label": "Truncate", "title": "Truncate", "icon": "bi-scissors", "isDangerous": True},
+    "drop": {"name": "drop", "label": "Drop", "title": "Drop", "icon": "bi-trash", "isDangerous": True},
 }
 
-def extract_column_metadata(column_names, table_meta):
-    """Extract column metadata from table metadata"""
-    if not table_meta:
-        return [{'name': name, 'type': None, 'role': 'regular'} for name in column_names]
-    
-    partition_keys = {col.name for col in table_meta.partition_key}
-    clustering_keys = {col.name for col in table_meta.clustering_key}
-    
-    column_metadata = []
-    for col_name in column_names:
-        col_meta = {
-            'name': col_name,
-            'type': None,
-            'role': 'regular'
-        }
-        
-        if col_name in partition_keys:
-            col_meta['role'] = 'partition_key'
-        elif col_name in clustering_keys:
-            col_meta['role'] = 'clustering_key'
-        elif col_name in table_meta.columns and table_meta.columns[col_name].is_static:
-            col_meta['role'] = 'static'
-        
-        if col_name in table_meta.columns:
-            col_meta['type'] = str(table_meta.columns[col_name].cql_type)
-        
-        column_metadata.append(col_meta)
-    
-    return column_metadata
+# Export format handlers
+EXPORT_FORMATS = {
+    "json": lambda rows, _: (json.dumps(rows, indent=2), "application/json"),
+    "csv": lambda rows, _: (
+        (writer := csv.DictWriter(StringIO(), fieldnames=rows[0].keys()), writer.writeheader(), writer.writerows(rows))[
+            0
+        ].writer.writerow.__self__.getvalue()
+        if rows
+        else "",
+        "text/csv",
+    ),
+    "cql": lambda rows, ddl, ks, ent: (
+        "\n".join(
+            [ddl]
+            + [
+                f'INSERT INTO "{ks}"."{ent}" ({", ".join(f"{k}" for k in r.keys())}) VALUES ({", ".join("NULL" if v in (None, "null") else f"{chr(39)}{str(v).replace(chr(39), chr(39) * 2)}{chr(39)}" for v in r.values())});'
+                for r in rows
+            ]
+        ),
+        "application/octet-stream",
+    ),
+}
+
+# Map UI Tree node types to their resolver logic (lambdas used to avoid NameErrors for functions defined below)
+NODE_RESOLVERS = {
+    "keyspace": lambda meta, args: resolve_keyspace(meta, args),
+    "group": lambda meta, args: resolve_group(meta, args),
+    "table": lambda meta, args: resolve_entity_columns(meta, args),
+    "view": lambda meta, args: resolve_entity_columns(meta, args),
+    "type": lambda meta, args: resolve_type_fields(meta, args),
+}
+
+
+# ==========================================
+# DECORATORS
+# ==========================================
+
+
+def api_safe(f):
+    """Wraps route to automatically catch exceptions and return JSON error/traceback."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except Exception as e:
+            return {"error": str(e), "traceback": traceback.format_exc()}, 500
+
+    return wrapper
+
+
+def require_shell(f):
+    """Injects the shell into the route based on session_id, returning 400 if disconnected."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        req = request.json if request.is_json else (request.form or request.args)
+        session_id = req.get("session_id", "default")
+        shell = shells.get(session_id)
+        if not shell:
+            return {"error": "Not connected. Call /connect first"}, 400
+        return f(shell, *args, **kwargs)
+
+    return wrapper
+
+
+def json_mode_fallback(original_method):
+    """Decorator factory that falls back to the original method if _json_mode is not active."""
+
+    def decorator(custom_impl):
+        @wraps(custom_impl)
+        def wrapper(self, *args, **kwargs):
+            if getattr(self, "_json_mode", False):
+                return custom_impl(self, *args, **kwargs)
+            return original_method(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# ==========================================
+# CORE SHELL PATCHING & EXECUTION
+# ==========================================
 
 
 def patch_shell_for_json():
     """Monkey-patch Shell class to output JSON instead of formatted text"""
-    
-    original_print_result = Shell.print_result
-    original_writeresult = Shell.writeresult
-    original_printerr = Shell.printerr
-    
+
+    @json_mode_fallback(Shell.print_result)
     def json_print_result(self, result, table_meta):
-        if not getattr(self, '_json_mode', False):
-            return original_print_result(self, result, table_meta)
-        
         column_names = result.column_names or (list(table_meta.columns.keys()) if table_meta else [])
-        
         cql_types = []
+
         if result.column_types:
             ks_name = table_meta.keyspace_name if table_meta else self.current_keyspace
             ks_meta = self.conn.metadata.keyspaces.get(ks_name, None)
             from cassandra.cqltypes import cql_typename
             from cqlshlib.formatting import CqlType
+
             cql_types = [CqlType(cql_typename(t), ks_meta) for t in result.column_types]
-        
+
         all_rows = []
         if result.current_rows:
             from cqlshlib.displaying import get_str
+
             for row in result.current_rows:
-                row_dict = {}
-                for idx, col_name in enumerate(column_names):
-                    value = row[col_name]
-                    cqltype = cql_types[idx] if idx < len(cql_types) else None
-                    
-                    # Use the shell's own formatting and extract string
-                    formatted = self.myformat_value(value, cqltype=cqltype)
-                    row_dict[col_name] = get_str(formatted)
-                
-                all_rows.append(row_dict)
-        
-        column_metadata = extract_column_metadata(column_names, table_meta)
-        
+                all_rows.append(
+                    {
+                        col: get_str(self.myformat_value(row[col], cqltype=(cql_types[i] if i < len(cql_types) else None)))
+                        for i, col in enumerate(column_names)
+                    }
+                )
+
         self._json_output = {
-            'keyspace': table_meta.keyspace_name if table_meta else None,
-            'table': table_meta.name if table_meta else None,
-            'rows': all_rows,
-            'row_count': len(all_rows),
-            'column_metadata': column_metadata,
-            'has_more_pages': result.has_more_pages,
-            'paging_state': result.paging_state.hex() if result.paging_state else None
+            "keyspace": table_meta.keyspace_name if table_meta else None,
+            "table": table_meta.name if table_meta else None,
+            "rows": all_rows,
+            "row_count": len(all_rows),
+            "column_metadata": extract_column_metadata(column_names, table_meta),
+            "has_more_pages": result.has_more_pages,
+            "paging_state": result.paging_state.hex() if result.paging_state else None,
         }
-    
+
+    @json_mode_fallback(Shell.writeresult)
     def json_writeresult(self, text, color=None, newline=True, out=None):
-        if not getattr(self, '_json_mode', False):
-            return original_writeresult(self, text, color, newline, out)
-        
-        if not hasattr(self, '_text_output'):
+        if not hasattr(self, "_text_output"):
             self._text_output = []
-        
         self._text_output.append(str(text))
-    
+
+    @json_mode_fallback(Shell.printerr)
     def json_printerr(self, text, color=None, newline=True, shownum=None):
-        if not getattr(self, '_json_mode', False):
-            return original_printerr(self, text, color, newline, shownum)
-        
-        if not hasattr(self, '_json_output'):
+        if not hasattr(self, "_json_output"):
             self._json_output = {}
-        if 'errors' not in self._json_output:
-            self._json_output['errors'] = []
-        self._json_output['errors'].append(str(text))
+        self._json_output.setdefault("errors", []).append(str(text))
         self.statement_error = True
-    
+
+    # Apply the patches
     Shell.print_result = json_print_result
     Shell.writeresult = json_writeresult
     Shell.printerr = json_printerr
 
+
+# Ensure this gets called to apply the patches
 patch_shell_for_json()
 
 
-def create_shell(host='127.0.0.1', port=9042, username=None, password=None, keyspace=None):
-    """Create a patched Shell instance"""
-    
-    desired_args = {
-        'hostname': host,
-        'port': port,
-        'config_file': '/tmp/cqlshrc',
-        'color': False,
-        'username': username,
-        'password': password,
-        'encoding': 'utf-8',
-        'stdin': StringIO(),
-        'tty': False,
-        'keyspace': keyspace,
-        'ssl': False,
-        'elapsed_enabled': False,
-        'completekey': None
-    }
-    
-    import inspect
-    shell_params = inspect.signature(Shell.__init__).parameters
+def extract_column_metadata(column_names, table_meta):
+    if not table_meta:
+        return [{"name": name, "type": None, "role": "regular"} for name in column_names]
 
-    shell_args = {
-        key: value for key, value in desired_args.items() 
-        if key in shell_params
+    pk = {c.name for c in table_meta.partition_key}
+    ck = {c.name for c in table_meta.clustering_key}
+
+    def get_role(name, meta):
+        if name in pk:
+            return "partition_key"
+        if name in ck:
+            return "clustering_key"
+        if name in meta.columns and meta.columns[name].is_static:
+            return "static"
+        return "regular"
+
+    return [
+        {"name": col, "type": str(table_meta.columns[col].cql_type) if col in table_meta.columns else None, "role": get_role(col, table_meta)}
+        for col in column_names
+    ]
+
+
+def create_shell(**kwargs):
+    """Create a patched Shell instance"""
+    if "host" in kwargs:
+        kwargs["hostname"] = kwargs.pop("host")
+
+    desired_args = {
+        "hostname": "127.0.0.1",
+        "port": 9042,
+        "config_file": "/tmp/cqlshrc",
+        "color": False,
+        "encoding": "utf-8",
+        "stdin": StringIO(),
+        "tty": False,
+        "ssl": False,
+        "elapsed_enabled": False,
+        "completekey": None,
     }
-    
+    desired_args.update(kwargs)
+
+    import inspect
+
+    shell_params = inspect.signature(Shell.__init__).parameters
+    shell_args = {k: v for k, v in desired_args.items() if k in shell_params}
+
     try:
         from cqlshlib import cqlshmain
+
         if cqlshmain.cqlruleset is None:
             from cqlshlib import cql3handling
+
             cqlshmain.setup_cqlruleset(cql3handling)
     except (ImportError, AttributeError):
         pass
-    
+
     shell = Shell(**shell_args)
-
     shell._json_mode = True
-    shell._json_output = {}
-    
-    # Patch execute_async to inject paging_state when present
     original_execute_async = shell.session.execute_async
-    def execute_async_with_paging(statement, *args, **kwargs):
-        paging_state = getattr(shell, '_current_paging_state', None)
-        if paging_state:
-            kwargs['paging_state'] = paging_state
-            shell._current_paging_state = None  # Consume it once so it doesn't affect subsequent queries
-        return original_execute_async(statement, *args, **kwargs)
-    
-    shell.session.execute_async = execute_async_with_paging
 
+    def execute_async_with_paging(statement, *args, **kwargs_inner):
+        if getattr(shell, "_current_paging_state", None):
+            kwargs_inner["paging_state"] = shell._current_paging_state
+            shell._current_paging_state = None
+        return original_execute_async(statement, *args, **kwargs_inner)
+
+    shell.session.execute_async = execute_async_with_paging
     return shell
 
 
 def execute_cql(shell, command, paging_state=None):
     """Execute a CQL command and return JSON result"""
-    if not command.strip().endswith(';'):
-        command = command.strip() + ';'
-    
-    if paging_state:
-        shell._current_paging_state = bytes.fromhex(paging_state)
-    else:
-        shell._current_paging_state = None
+    command = command.strip() if command.strip().endswith(";") else command.strip() + ";"
+    shell._current_paging_state = bytes.fromhex(paging_state) if paging_state else None
+    shell.statement_error, shell._json_output, shell._text_output = False, {}, []
 
-    shell.statement_error = False
-    shell._json_output = {}
-    shell._text_output = []
-
-    # Capture output by redirecting both sys.stdout and shell.query_out
-    old_stdout = sys.stdout
-    old_query_out = shell.query_out
+    old_stdout, old_query_out = sys.stdout, shell.query_out
     output_capture = StringIO()
-    
-    sys.stdout = output_capture
-    shell.query_out = output_capture
-    
+    sys.stdout = shell.query_out = output_capture
+
     try:
         shell.statement.truncate(0)
         shell.statement.seek(0)
-        shell.statement.write(command + '\n')
+        shell.statement.write(command + "\n")
         shell.onecmd(shell.statement.getvalue())
-        
-        captured_output = output_capture.getvalue()
-        if captured_output:
-            shell._text_output.append(captured_output.strip())
-    except Exception as e:
-        # Restore outputs even on exception
-        sys.stdout = old_stdout
-        shell.query_out = old_query_out
-        raise
+
+        captured = output_capture.getvalue()
+        if captured:
+            shell._text_output.append(captured.strip())
     finally:
-        sys.stdout = old_stdout
-        shell.query_out = old_query_out
-    
-    # Build result from available data
-    result = {'last_query': command.strip()}
-    
+        sys.stdout, shell.query_out = old_stdout, old_query_out
+
+    result = {"last_query": command}
     if shell._json_output:
         result.update(shell._json_output)
-    
     if shell._text_output:
-        result['output'] = '\n'.join(shell._text_output).strip()
-    
+        result["output"] = "\n".join(shell._text_output).strip()
+
     shell.reset_statement()
-    
     return result, shell.statement_error
 
 
-@app.route('/')
-@app.route('/keyspace')
-@app.route('/keyspace/')
-@app.route('/keyspace/<path:subpath>')
-def index(subpath=None):
-    return send_from_directory('.', 'index.html')
+# ==========================================
+# TREE NODE RESOLVERS
+# ==========================================
 
 
-# Only expose /connect endpoint if not auto-connecting
-if not AUTO_CONNECT:
-    @app.route('/api/connect', methods=['POST'])
-    def connect():
-        """Connect to Cassandra"""
-        data = request.json or {}
-        
-        try:
-            shell = create_shell(
-                host=data.get('host', '127.0.0.1'),
-                port=data.get('port', 9042),
-                username=data.get('username'),
-                password=data.get('password'),
-                keyspace=data.get('keyspace')
-            )
-            
-            session_id = data.get('session_id', 'default')
-            shells[session_id] = shell
-            
-            return {
-                'status': 'connected',
-                'session_id': session_id,
-                'cluster': shell.get_cluster_name(),
-                'keyspace': shell.current_keyspace
-            }
-        
-        except Exception as e:
-            return {'error': str(e)}, 500
-
-@app.route('/api/execute', methods=['POST'])
-def execute():
-    """Execute raw CQL commands"""
-    data = request.json or {}
-    command = data.get('command')
-    session_id = data.get('session_id', 'default')
-    page_size = data.get('page_size')
-    paging_state = data.get('paging_state')
-    
-    if not command:
-        return {'error': 'No command provided'}, 400
-    
-    shell = shells.get(session_id)
-    if not shell:
-        return {'error': 'Not connected. Call /connect first'}, 400
-    
-    original_page_size = None
-    if page_size:
-        original_page_size = shell.page_size
-        shell.page_size = page_size
-    
-    try:
-        result, has_error = execute_cql(shell, command, paging_state)
-        
-        if has_error:
-            return result, 400
-        
-        return result
-        
-    except Exception as e:
-        import traceback
-        return {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }, 500
-    
-    finally:
-        if original_page_size is not None:
-            shell.page_size = original_page_size
-
-@app.route('/api/action', methods=['POST'])
-def handle_action():
-    """Handle server-side execution of drop and truncate actions"""
-    data = request.json or {}
-    action = data.get('action')
-    keyspace = data.get('keyspace')
-    entity_type = data.get('type')
-    entity = data.get('entity')
-    session_id = data.get('session_id', 'default')
-
-    shell = shells.get(session_id)
-    if not shell:
-        return {'error': 'Not connected. Call /connect first'}, 400
-
-    def quote_ident(name):
-        if not name: return ""
-        return f'"{name.replace(chr(34), chr(34)+chr(34))}"' if not re.match(r'^[a-z_][a-z0-9_]*$', name) else name
-
-    ks_q = quote_ident(keyspace)
-    ent_q = quote_ident(entity)
-
-    cql = ""
-    if action == 'drop':
-        if entity_type == 'keyspace':
-            cql = f"DROP KEYSPACE {ks_q};"
-        else:
-            cql = f"DROP {entity_type.upper()} {ks_q}.{ent_q};"
-    elif action == 'truncate':
-        cql = f"TRUNCATE {ks_q}.{ent_q};"
-    else:
-        return {'error': f'Unsupported action: {action}'}, 400
-
-    result, has_error = execute_cql(shell, cql)
-    if has_error:
-        return result, 400
-
-    return {'success': True, 'message': f"Action '{action}' executed successfully."}
+def build_node(id, label, type, keyspace, entity=None, group=None, column=None, has_children=False, actions=None, click_act=None, export_url=None):
+    """DRY builder for UI Tree nodes"""
+    node = {
+        "id": id,
+        "label": label,
+        "type": type,
+        "keyspace": keyspace,
+        "hasChildren": has_children,
+        "actions": actions or [],
+        "defaultClickAction": click_act,
+        "isClickable": click_act is not None,
+    }
+    for k, v in [("entity", entity), ("group", group), ("column", column), ("exportUrl", export_url)]:
+        if v:
+            node[k] = v
+    return node
 
 
-@app.route('/api/schema', methods=['GET'])
-def get_schema():
-    """Get the top-level keyspaces only."""
-    session_id = request.args.get('session_id', 'default')
-    
-    shell = shells.get(session_id)
-    if not shell:
-        return {'error': 'Not connected. Call /connect first'}, 400
-    
-    try:
-        keyspaces = []
-        cluster_meta = shell.session.cluster.metadata
-        for keyspace_name in sorted(cluster_meta.keyspaces.keys()):
-            keyspaces.append({
-                'id': f"ks_{keyspace_name}",
-                'label': keyspace_name,
-                'type': 'keyspace',
-                'keyspace': keyspace_name,
-                'hasChildren': True,
-                'childrenLoaded': False,
-                'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['drop']],
-                'defaultClickAction': 'expand',
-                'isClickable': True,
-                'exportUrl': f"/api/keyspaces/{keyspace_name}/export"
-            })
-
-        # Get connection information
-        vers = shell.connection_versions.copy()
-        connection_info = {
-            'cluster_name': shell.get_cluster_name(),
-            'host': shell.hostname,
-            'port': shell.port,
-            'cql_version': shell.cql_version,
-            'cassandra_version': vers.get('build', 'unknown'),
-            'protocol_version': vers.get('protocol', 'unknown'),
-            'cqlsh_version': cqlsh_version,
-        }
-        
-        return {
-            'connection': connection_info,
-            'schema': keyspaces
-        }
-    except Exception as e:
-        import traceback
-        return {'error': str(e), 'traceback': traceback.format_exc()}, 500
-
-# Resolvers
 def resolve_keyspace(ks_meta, args):
-    groups = []
-    ks = ks_meta.name
-    # Singularized the first value in these tuples (the 'group' identifier)
     checks = [
-        ('table', 'Tables', lambda m: bool(m.tables)),
-        ('view', 'Views', lambda m: bool(m.views)),
-        ('type', 'Types', lambda m: hasattr(m, 'user_types') and bool(m.user_types)),
-        ('function', 'Functions', lambda m: hasattr(m, 'functions') and bool(m.functions)),
-        ('trigger', 'Triggers', lambda m: any(hasattr(t, 'triggers') and t.triggers for t in m.tables.values()))
+        ("table", "Tables", lambda m: bool(m.tables)),
+        ("view", "Views", lambda m: bool(m.views)),
+        ("type", "Types", lambda m: getattr(m, "user_types", None)),
+        ("function", "Functions", lambda m: getattr(m, "functions", None)),
+        ("trigger", "Triggers", lambda m: any(getattr(t, "triggers", None) for t in m.tables.values())),
     ]
-    
-    for group_id, label, condition in checks:
-        if condition(ks_meta):
-            groups.append({
-                'id': f"{ks}_grp_{group_id}", 'label': label, 'type': 'group',
-                'group': group_id, 'keyspace': ks, 
-                'hasChildren': True, 'actions': [],
-                'defaultClickAction': 'expand', 'isClickable': True 
-            })
-    return groups
+    return [
+        build_node(f"{ks_meta.name}_grp_{g_id}", label, "group", ks_meta.name, group=g_id, has_children=True, click_act="expand")
+        for g_id, label, cond in checks
+        if cond(ks_meta)
+    ]
+
 
 def resolve_group(ks_meta, args):
-    group = args.get('group')
-    ks = ks_meta.name
-    
-    # Matches the new singular group keys
-    if group == 'table':
-      return [{
-          'id': f"{ks}_table_{t}", 'label': t, 'type': 'table', 'entity': t, 'keyspace': ks, 
-          'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['truncate'], ACTION_DEF['drop']], 
-          'defaultClickAction': 'select', 'isClickable': True,
-          'exportUrl': f"/api/keyspaces/{ks}/tables/{t}/export"
-      } for t in sorted(ks_meta.tables.keys())]
-    
-    elif group == 'view':
-        return [{
-            'id': f"{ks}_view_{v}", 'label': v, 'type': 'view', 'entity': v, 'keyspace': ks, 
-            'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['export'], ACTION_DEF['drop']], 
-            'defaultClickAction': 'select', 'isClickable': True,
-            'exportUrl': f"/api/keyspaces/{ks}/views/{v}/export"
-        } for v in sorted(ks_meta.views.keys())]
+    group, ks = args.get("group"), ks_meta.name
 
-    elif group == 'type':
-        if not hasattr(ks_meta, 'user_types'): return []
-        return [{'id': f"{ks}_type_{t}", 'label': t, 'type': 'type', 'entity': t, 'keyspace': ks, 'hasChildren': True, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for t in sorted(ks_meta.user_types.keys())]
-    
-    elif group == 'function':
-        if not hasattr(ks_meta, 'functions'): return []
-        unique_funcs = {f.name: f for f in ks_meta.functions.values()}.values()
-        return [{'id': f"{ks}_func_{f.name}", 'label': f.name, 'type': 'function', 'entity': f.name, 'keyspace': ks, 'hasChildren': False, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for f in sorted(unique_funcs, key=lambda x: x.name)]
-    
-    elif group == 'trigger':
-        triggers = {trg for t in ks_meta.tables.values() if hasattr(t, 'triggers') and t.triggers for trg in t.triggers.keys()}
-        return [{'id': f"{ks}_trigger_{trg}", 'label': trg, 'type': 'trigger', 'entity': trg, 'keyspace': ks, 'hasChildren': False, 'actions': [ACTION_DEF['describe'], ACTION_DEF['drop']], 'defaultClickAction': 'describe', 'isClickable': True} for trg in sorted(triggers)]
-        
+    entity_map = {
+        "table": (ks_meta.tables, [ACTION_DEF["describe"], ACTION_DEF["export"], ACTION_DEF["truncate"], ACTION_DEF["drop"]], "select", True),
+        "view": (ks_meta.views, [ACTION_DEF["describe"], ACTION_DEF["export"], ACTION_DEF["drop"]], "select", True),
+        "type": (getattr(ks_meta, "user_types", {}), [ACTION_DEF["describe"], ACTION_DEF["drop"]], "describe", True),
+        "function": (getattr(ks_meta, "functions", {}), [ACTION_DEF["describe"], ACTION_DEF["drop"]], "describe", False),
+    }
+
+    if group in entity_map:
+        items, actions, click_act, has_children = entity_map[group]
+        items = {f.name: f for f in items.values()} if group == "function" else items
+
+        return [
+            build_node(
+                f"{ks}_{group}_{k}",
+                k,
+                group,
+                ks,
+                entity=k,
+                has_children=has_children,
+                actions=actions,
+                click_act=click_act,
+                export_url=f"/api/keyspaces/{ks}/{group}s/{k}/export" if group in ["table", "view"] else None,
+            )
+            for k in sorted(items.keys())
+        ]
+
+    elif group == "trigger":
+        triggers = {trg for t in ks_meta.tables.values() if getattr(t, "triggers", None) for trg in t.triggers.keys()}
+        return [
+            build_node(
+                f"{ks}_trigger_{trg}", trg, "trigger", ks, entity=trg, actions=[ACTION_DEF["describe"], ACTION_DEF["drop"]], click_act="describe"
+            )
+            for trg in sorted(triggers)
+        ]
     return []
 
+
 def resolve_entity_columns(ks_meta, args):
-    node_type = args.get('type')
-    entity = args.get('entity')
-    ks = ks_meta.name
-    
-    meta = ks_meta.tables.get(entity) if node_type == 'table' else ks_meta.views.get(entity)
-    if not meta: return []
-    
-    return [{
-        'id': f"{ks}_{node_type}_{entity}_col_{c}",
-        'label': f"{c} ({c_meta.cql_type})",
-        'type': 'column',
-        'keyspace': ks, 'entity': entity, 'column': c,
-        'hasChildren': False, 'actions': [],
-        'defaultClickAction': None, 'isClickable': False 
-    } for c, c_meta in meta.columns.items()]
+    node_type, entity, ks = args.get("type"), args.get("entity"), ks_meta.name
+    meta = ks_meta.tables.get(entity) if node_type == "table" else ks_meta.views.get(entity)
+    if not meta:
+        return []
+
+    return [
+        build_node(f"{ks}_{node_type}_{entity}_col_{c}", f"{c} ({c_meta.cql_type})", "column", ks, entity=entity, column=c)
+        for c, c_meta in meta.columns.items()
+    ]
+
 
 def resolve_type_fields(ks_meta, args):
-    entity = args.get('entity')
-    ks = ks_meta.name
-    
+    entity, ks = args.get("entity"), ks_meta.name
     user_type = ks_meta.user_types.get(entity)
-    if not user_type: return []
-    
-    return [{
-        'id': f"{ks}_type_{entity}_field_{f}",
-        'label': f"{f} ({user_type.field_types[i]})",
-        'type': 'column', 
-        'keyspace': ks, 'entity': entity, 'column': f,
-        'hasChildren': False, 'actions': [],
-        'defaultClickAction': None, 'isClickable': False 
-    } for i, f in enumerate(user_type.field_names)]
+    if not user_type:
+        return []
 
-NODE_RESOLVERS = {
-    'keyspace': resolve_keyspace,
-    'group': resolve_group,
-    'table': resolve_entity_columns,
-    'view': resolve_entity_columns,
-    'type': resolve_type_fields
-}
+    return [
+        build_node(f"{ks}_type_{entity}_field_{f}", f"{f} ({user_type.field_types[i]})", "column", ks, entity=entity, column=f)
+        for i, f in enumerate(user_type.field_names)
+    ]
 
-@app.route('/api/schema/children', methods=['GET'])
-def get_schema_children():
-    """Generic lazy-loading endpoint powered by the resolver registry."""
-    session_id = request.args.get('session_id', 'default')
-    node_type = request.args.get('type')
-    keyspace_name = request.args.get('keyspace')
-    
-    shell = shells.get(session_id)
-    if not shell:
-        return {'error': 'Not connected.'}, 400
-        
-    try:
-        ks_meta = shell.session.cluster.metadata.keyspaces.get(keyspace_name)
-        if not ks_meta:
-            return {'children': []}
 
-        resolver = NODE_RESOLVERS.get(node_type)
-        if not resolver:
-            return {'children': []}
+# ==========================================
+# API ROUTES
+# ==========================================
 
-        children = resolver(ks_meta, request.args)
-        return {'children': children}
-        
-    except Exception as e:
-        import traceback
-        return {'error': str(e), 'traceback': traceback.format_exc()}, 500
 
-@app.route('/api/disconnect', methods=['POST'])
-def disconnect():
-    """Disconnect from Cassandra"""
+@app.route("/")
+def root():
+    return send_from_directory(".", "index.html")
+
+if not AUTO_CONNECT:
+    @app.route("/api/connect", methods=["POST"])
+    @api_safe
+    def connect():
+        data = request.json or {}
+        shell = create_shell(**{k: data.get(k) for k in ["host", "port", "username", "password", "keyspace"] if data.get(k) is not None})
+        session_id = data.get("session_id", "default")
+        shells[session_id] = shell
+        return {"status": "connected", "session_id": session_id, "cluster": shell.get_cluster_name(), "keyspace": shell.current_keyspace}
+
+
+@app.route("/api/execute", methods=["POST"])
+@api_safe
+@require_shell
+def execute(shell):
     data = request.json or {}
-    session_id = data.get('session_id', 'default')
-    
-    shell = shells.get(session_id)
-    if shell:
-        if shell.owns_connection:
-            shell.conn.shutdown()
-        del shells[session_id]
-    
-    return {'status': 'disconnected'}
+    if not (command := data.get("command")):
+        return {"error": "No command provided"}, 400
 
-@app.route('/api/keyspaces/<keyspace>/<collection_type>/<entity>/export', methods=['POST'])
-def export_entity(keyspace, collection_type, entity):
-    """Export data from a table or view"""
-    entity_type = 'table' if collection_type == 'tables' else 'view'
-    export_format = request.form.get('format', 'csv')
-    limit = int(request.form.get('limit', 0))
-    include_ddl = request.form.get('include_ddl') == '1'
-    
-    shell = shells.get('default')
-    if not shell:
-        return "Not connected to Cassandra", 400
-        
-    cql_ddl = ""
-    if include_ddl and export_format == 'cql' and entity_type == 'table':
-        ddl_res, _ = execute_cql(shell, f'DESCRIBE TABLE "{keyspace}"."{entity}";')
-        cql_ddl = ddl_res.get('output', '') + "\n\n"
-        
-    query = f'SELECT * FROM "{keyspace}"."{entity}"'
-    if limit > 0:
-        query += f' LIMIT {limit}'
-        
     original_page_size = shell.page_size
-    shell.page_size = limit if limit > 0 else 10000 
-    
+    if page_size := data.get("page_size"):
+        shell.page_size = page_size
+
     try:
-        result, has_error = execute_cql(shell, query)
+        result, has_error = execute_cql(shell, command, data.get("paging_state"))
+        return result, (400 if has_error else 200)
     finally:
         shell.page_size = original_page_size
-        
+
+
+@app.route("/api/action", methods=["POST"])
+@api_safe
+@require_shell
+def handle_action(shell):
+    data = request.json or {}
+    action, keyspace, entity_type, entity = map(data.get, ("action", "keyspace", "type", "entity"))
+
+    def quote_ident(n):
+        return f'"{n.replace(chr(34), chr(34) + chr(34))}"' if n and not re.match(r"^[a-z_][a-z0-9_]*$", n) else (n or "")
+
+    ks_q, ent_q = quote_ident(keyspace), quote_ident(entity)
+    queries = {
+        "drop": f"DROP KEYSPACE {ks_q};" if entity_type == "keyspace" else f"DROP {entity_type.upper()} {ks_q}.{ent_q};",
+        "truncate": f"TRUNCATE {ks_q}.{ent_q};",
+    }
+
+    if action not in queries:
+        return {"error": f"Unsupported action: {action}"}, 400
+
+    result, has_error = execute_cql(shell, queries[action])
+    return result if has_error else {"success": True, "message": f"Action '{action}' executed successfully."}, (400 if has_error else 200)
+
+
+@app.route("/api/schema", methods=["GET"])
+@api_safe
+@require_shell
+def get_schema(shell):
+    keyspaces = [
+        build_node(
+            f"ks_{ks}",
+            ks,
+            "keyspace",
+            ks,
+            has_children=True,
+            actions=[ACTION_DEF["describe"], ACTION_DEF["export"], ACTION_DEF["drop"]],
+            click_act="expand",
+            export_url=f"/api/keyspaces/{ks}/export",
+        )
+        for ks in sorted(shell.session.cluster.metadata.keyspaces.keys())
+    ]
+
+    vers = shell.connection_versions.copy()
+    return {
+        "connection": {
+            "cluster_name": shell.get_cluster_name(),
+            "host": shell.hostname,
+            "port": shell.port,
+            "cql_version": shell.cql_version,
+            "cassandra_version": vers.get("build", "unknown"),
+            "protocol_version": vers.get("protocol", "unknown"),
+            "cqlsh_version": cqlsh_version,
+        },
+        "schema": keyspaces,
+    }
+
+
+@app.route("/api/schema/children", methods=["GET"])
+@api_safe
+@require_shell
+def get_schema_children(shell):
+    node_type, keyspace_name = request.args.get("type"), request.args.get("keyspace")
+    ks_meta = shell.session.cluster.metadata.keyspaces.get(keyspace_name)
+
+    # Calling the lambda from our constants dictionary
+    resolver = NODE_RESOLVERS.get(node_type) if ks_meta else None
+    return {"children": resolver(ks_meta, request.args) if resolver else []}
+
+
+@app.route("/api/disconnect", methods=["POST"])
+def disconnect():
+    session_id = (request.json or {}).get("session_id", "default")
+    if shell := shells.pop(session_id, None):
+        if shell.owns_connection:
+            shell.conn.shutdown()
+    return {"status": "disconnected"}
+
+
+@app.route("/api/keyspaces/<keyspace>/<collection_type>/<entity>/export", methods=["POST"])
+@api_safe
+@require_shell
+def export_entity(shell, keyspace, collection_type, entity):
+    fmt, limit, include_ddl = (request.form.get("format", "csv"), int(request.form.get("limit", 0)), request.form.get("include_ddl") == "1")
+    entity_type = "table" if collection_type == "tables" else "view"
+
+    cql_ddl = (
+        f"{execute_cql(shell, f'DESCRIBE TABLE {keyspace}.{entity};')[0].get('output', '')}\n\n"
+        if include_ddl and fmt == "cql" and entity_type == "table"
+        else ""
+    )
+
+    original_page_size, shell.page_size = shell.page_size, limit if limit > 0 else 10000
+    try:
+        result, has_error = execute_cql(shell, f'SELECT * FROM "{keyspace}"."{entity}"{" LIMIT " + str(limit) if limit > 0 else ""}')
+    finally:
+        shell.page_size = original_page_size
+
     if has_error:
-        return result.get('output', 'Error executing export query'), 400
-        
-    rows = result.get('rows', [])
-    filename = f"{keyspace}_{entity}_export.{export_format}"
-    
-    if export_format == 'json':
-        import json
-        content = json.dumps(rows, indent=2)
-        mimetype = 'application/json'
-        
-    elif export_format == 'csv':
-        output = StringIO()
-        if rows:
-            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-            writer.writeheader()
-            writer.writerows(rows)
-        content = output.getvalue()
-        mimetype = 'text/csv'
-        
-    elif export_format == 'cql':
-        lines = [cql_ddl] if cql_ddl else []
-        for row in rows:
-            columns = ', '.join([f'"{k}"' for k in row.keys()])
-            values = []
-            for v in row.values():
-                if v is None or v == 'null':
-                    values.append('NULL')
-                else:
-                    escaped_v = str(v).replace("'", "''")
-                    values.append(f"'{escaped_v}'")
-                    
-            values_str = ', '.join(values)
-            lines.append(f'INSERT INTO "{keyspace}"."{entity}" ({columns}) VALUES ({values_str});')
-            
-        content = '\n'.join(lines)
-        mimetype = 'application/octet-stream'
-        
-    else:
+        return result.get("output", "Error executing export query"), 400
+    if fmt not in EXPORT_FORMATS:
         return "Invalid export format", 400
-        
-    return Response(
-        content,
-        mimetype=mimetype,
-        headers={"Content-Disposition": f"attachment;filename={filename}"}
+
+    content, mimetype = (
+        EXPORT_FORMATS[fmt](result.get("rows", []), cql_ddl, keyspace, entity)
+        if fmt == "cql"
+        else EXPORT_FORMATS[fmt](result.get("rows", []), cql_ddl)
     )
 
-@app.route('/api/keyspaces/<keyspace>/export', methods=['POST'])
-def export_keyspace(keyspace):
-    """Export an entire keyspace schema (equivalent to DESCRIBE KEYSPACE)"""
-    shell = shells.get('default')
-    if not shell:
-        return "Not connected to Cassandra", 400
-        
+    return Response(content, mimetype=mimetype, headers={"Content-Disposition": f"attachment;filename={keyspace}_{entity}_export.{fmt}"})
+
+
+@app.route("/api/keyspaces/<keyspace>/export", methods=["POST"])
+@api_safe
+@require_shell
+def export_keyspace(shell, keyspace):
     result, has_error = execute_cql(shell, f'DESCRIBE KEYSPACE "{keyspace}";')
-    
     if has_error:
-        return result.get('output', 'Error exporting keyspace schema'), 400
-        
-    content = result.get('output', '')
-    filename = f"{keyspace}_schema.cql"
-    
+        return result.get("output", "Error exporting keyspace schema"), 400
+
     return Response(
-        content,
-        mimetype='application/octet-stream',
-        headers={"Content-Disposition": f"attachment;filename={filename}"}
+        result.get("output", ""), mimetype="application/octet-stream", headers={"Content-Disposition": f"attachment;filename={keyspace}_schema.cql"}
     )
 
-if __name__ == '__main__':
-    print("Starting Flask CQLSH API on 0.0.0.0:5000")
-    
+
+# ==========================================
+# MAIN
+# ==========================================
+
+if __name__ == "__main__":
+    print(f"Starting Flask CQLSH API on {APP_LISTEN}:{APP_PORT}")
     if AUTO_CONNECT:
         print("Auto-connecting using environment variables...")
         try:
             shell = create_shell(
-                host=os.getenv('CASSANDRA_HOST', '127.0.0.1'),
-                port=int(os.getenv('CASSANDRA_PORT', '9042')),
-                username=os.getenv('CASSANDRA_USERNAME'),
-                password=os.getenv('CASSANDRA_PASSWORD'),
-                keyspace=os.getenv('CASSANDRA_KEYSPACE')
+                host=CASSANDRA_HOST, port=CASSANDRA_PORT, username=CASSANDRA_USERNAME, password=CASSANDRA_PASSWORD, keyspace=CASSANDRA_KEYSPACE
             )
-            shells['default'] = shell
-            print(f"Connected to {shell.get_cluster_name()}")
-            if shell.current_keyspace:
-                print(f"Using keyspace: {shell.current_keyspace}")
+            shells["default"] = shell
+            print(f"Connected to {shell.get_cluster_name()}. Using keyspace: {shell.current_keyspace}")
         except Exception as e:
-            print(f"Failed to auto-connect: {e}")
-            sys.exit(1)
+            sys.exit(f"Failed to auto-connect: {e}")
     else:
         print("No CASSANDRA_HOST environment variable set. Use /connect endpoint to connect.")
-    
-    app.run(debug=True, host='0.0.0.0', port=5000)
+
+    app.run(debug=True, host=APP_LISTEN, port=APP_PORT)

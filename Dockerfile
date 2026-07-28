@@ -4,8 +4,10 @@ ARG CASSANDRA_VERSION=5.0.1
 ENV PYTHONPATH=/opt/cassandra/pylib:/opt/cassandra/bin
 ENV PATH="/opt/cassandra/bin:${PATH}"
 
-COPY ./src /app
+COPY ./src/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
+
+RUN pip install --no-cache-dir ruff watchfiles pytest requests
 
 RUN wget https://github.com/apache/cassandra/archive/refs/tags/cassandra-${CASSANDRA_VERSION}.tar.gz && \
     mkdir -p /opt/cassandra && \
@@ -18,4 +20,4 @@ RUN if [ ! -f /opt/cassandra/pylib/cqlshlib/cqlshmain.py ]; then \
         cp /opt/cassandra/bin/cqlsh.py /opt/cassandra/pylib/cqlshlib/cqlshmain.py; \
     fi
 
-CMD ["python", "/app/app.py"]
+CMD ["sh", "-c", "watchfiles 'ruff format /app/app.py' /app & python /app/app.py"]

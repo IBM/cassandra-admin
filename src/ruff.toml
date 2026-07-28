@@ -1,0 +1,15 @@
+line-length = 150 
+
+[lint]
+select = [
+    "E", "F",  # Standard checks
+    "I",       # isort: Condenses and groups multiple import lines into one
+    "SIM",     # flake8-simplify: Combines nested ifs, simplifies boolean logic
+    "C4",      # flake8-comprehensions: Shrinks list/dict creation syntax
+    "UP",      # pyupgrade: Replaces old verbose syntax with modern short syntax
+]
+fixable = ["ALL"] 
+
+[format]
+skip-magic-trailing-comma = true
+quote-style = "double"

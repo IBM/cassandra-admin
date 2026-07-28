@@ -14,8 +14,10 @@ services:
       - "5001:5000"
     volumes:
       - ./src:/app
+      - ./tests/test_api.py:/tests/test_api.py
     restart: unless-stopped
     init: true
+
   cassandra:
     image: cassandra:5.0.1
     container_name: cassandra_db
@@ -28,4 +30,9 @@ services:
       - MAX_HEAP_SIZE=512M
       - HEAP_NEWSIZE=100M
     restart: unless-stopped
-    
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s

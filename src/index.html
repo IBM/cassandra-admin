@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html x-data="{ darkMode: localStorage.getItem('darkMode') || localStorage.setItem('darkMode', 'system')}" x-init="$watch('darkMode', val => localStorage.setItem('darkMode', val))">
+<html x-data="{ darkMode: localStorage.getItem('darkMode') || localStorage.setItem('darkMode', 'system')}"
+  x-init="$watch('darkMode', val => localStorage.setItem('darkMode', val))">
+
 <head>
   <meta charset="UTF-8">
   <title>Cassandra Admin</title>
@@ -10,20 +12,29 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
-    [x-cloak] { display: none !important; }
+    [x-cloak] {
+      display: none !important;
+    }
   </style>
 </head>
-<body :data-bs-theme="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'" class="small overflow-hidden">
+
+<body
+  :data-bs-theme="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'"
+  class="small overflow-hidden">
   <div x-data="main()">
-    
+
     <!-- Toasts -->
     <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 11000;">
       <template x-for="toast in visibleToasts" :key="toast.id">
         <div class="toast show" role="alert" aria-live="assertive" aria-atomic="true">
-          <div class="toast-header" :class="toast.type === 'error' ? 'bg-danger text-white' : toast.type === 'success' ? 'bg-success text-white' : 'bg-info text-white'">
-            <i class="bi me-2" :class="toast.type === 'error' ? 'bi-exclamation-circle-fill' : toast.type === 'success' ? 'bi-check-circle-fill' : 'bi-info-circle-fill'"></i>
+          <div class="toast-header"
+            :class="toast.type === 'error' ? 'bg-danger text-white' : toast.type === 'success' ? 'bg-success text-white' : 'bg-info text-white'">
+            <i class="bi me-2"
+              :class="toast.type === 'error' ? 'bi-exclamation-circle-fill' : toast.type === 'success' ? 'bi-check-circle-fill' : 'bi-info-circle-fill'"></i>
             <strong class="me-auto" x-text="toast.title"></strong>
-            <button type="button" class="btn-close" :class="toast.type === 'error' || toast.type === 'success' ? 'btn-close-white' : ''" @click="removeToast(toast.id)" aria-label="Close"></button>
+            <button type="button" class="btn-close"
+              :class="toast.type === 'error' || toast.type === 'success' ? 'btn-close-white' : ''"
+              @click="removeToast(toast.id)" aria-label="Close"></button>
           </div>
           <div class="toast-body" x-text="toast.message"></div>
         </div>
@@ -32,64 +43,82 @@
 
     <!-- Schema Error State -->
     <template x-if="schemaError">
-      <div class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
+      <div
+        class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
         <i class="bi bi bi-exclamation-triangle-fill fs-1 mb-3 text-secondary"></i>
-        <h4 class="text-secondary text-center user-select-none">Could not fetch Cassandra schema. Please check your connection settings.</h4>
+        <h4 class="text-secondary text-center user-select-none">Could not fetch Cassandra schema. Please check your
+          connection settings.</h4>
       </div>
     </template>
 
     <!-- Main Layout -->
-    <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }" style="height: 100vh;">
-      
+    <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }"
+      style="height: 100vh;">
+
       <!-- Sidebar -->
-      <nav class="border-end col-lg-2 col-md-3 d-flex flex-column h-100 overflow-hidden position-relative sidebar vh-100">
-        <div class="p-2 px-4 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
-          <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis fw-bold">Cassandra Admin</a>
+      <nav
+        class="border-end col-lg-2 col-md-3 d-flex flex-column h-100 overflow-hidden position-relative sidebar vh-100">
+        <div
+          class="p-2 px-4 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
+          <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis fw-bold">Cassandra
+            Admin</a>
           <div>
-            <button @click="darkMode = darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'"
+            <button
+              @click="darkMode = darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'"
               class="btn btn-link btn-sm float-end text-body-emphasis">
-              <i class="bi" :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
+              <i class="bi"
+                :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
             </button>
           </div>
         </div>
-        
+
         <div x-show="loading" class="text-center position-absolute start-50 top-50 translate-middle">
           <div class="spinner-border spinner-border-sm" role="status"></div>
           <span class="ms-2">Loading schema...</span>
         </div>
-        
-        <div class="text-nowrap overflow-y-auto h-100 pb-5" x-show="!loading">
-          <template x-for="node in visibleNodes" :key="node.id">
-            <div class="d-flex align-items-center py-1 pe-3 border-bottom border-light-subtle"
-              :class="{ 'bg-body-secondary': selected.id === node.id, 'fw-bold text-uppercase text-muted': node.type === 'group' }"
-              :style="`padding-left: ${(node.depth * 1.5) + 1}rem`"
-              x-data="{ showActions: false, dropdownOpen: false }"
-              @mouseenter="showActions = true"
-              @mouseleave="if (!dropdownOpen) showActions = false">
 
+        <div class="text-nowrap overflow-y-auto h-100 p-2" x-show="!loading">
+          <template x-for="node in visibleNodes" :key="node.id">
+            <div class="align-items-center bg-opacity-10 d-flex pe-3 py-1 border-start border-5" 
+                :class="{ 
+                  'bg-primary border-primary': selected.id === node.id, 
+                  'text-muted': node.type === 'group' 
+                }"
+                :style="`padding-left: ${(node.depth * 1.5) + 1}rem; border-color: ${selected.id === node.id ? 'var(--bs-primary)' : 'transparent !important'}`"
+                x-data="{ showActions: false, dropdownOpen: false }"
+                @mouseenter="showActions = true" @mouseleave="if (!dropdownOpen) showActions = false">
               <!-- Expander / Spinner -->
-              <button class="btn btn-sm p-0 me-1 border-0 flex-shrink-0" style="width: 20px;" x-show="node.hasChildren" @click.stop="toggleNode(node)">
+              <button class="btn btn-sm p-0 me-1 border-0 flex-shrink-0" style="width: 20px;" x-show="node.hasChildren"
+                @click.stop="toggleNode(node)">
                 <div x-show="node.isLoading" class="spinner-border spinner-border-sm text-secondary" style="width: 0.75rem; height: 0.75rem;" role="status" x-cloak></div>
-                <i x-show="!node.isLoading" class="bi text-secondary" :class="node.expanded ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                <i x-show="!node.isLoading" class="bi text-secondary small" :class="node.expanded ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
               </button>
               <div x-show="!node.hasChildren" class="flex-shrink-0" style="width: 24px;"></div>
 
               <!-- Node Label -->
-              <a href="javascript:void(0)" class="d-flex flex-fill text-decoration-none align-items-center overflow-hidden" :class="{ 'cursor-default opacity-75': !node.isClickable }" style="color: inherit;" @click.prevent="handleNodeClick(node)"> 
-                <i class="bi pe-2" :class="getIcon(node)"></i>
-                <span class="text-truncate" x-text="node.label" :title="node.label" :style="node.type === 'group' ? 'font-size: 0.7rem; letter-spacing: 0.5px;' : ''"></span>
+              <a href="javascript:void(0)"
+                class="d-flex flex-fill text-decoration-none align-items-center overflow-hidden fw-medium small"
+                :class="{ 'cursor-default opacity-75': !node.isClickable }" style="color: inherit;"
+                @click.prevent="handleNodeClick(node)">
+                <i class="bi pe-2" :class="[getIcon(node), selected.id === node.id ? 'text-primary-emphasis' : 'text-body-tertiary']"></i>
+                <span class="text-truncate" x-text="node.label" :title="node.label"
+                  :class="node.type === 'group' ? 'small' : ''"></span>
               </a>
 
               <!-- Node Actions -->
               <template x-if="node.actions && node.actions.length > 0">
-                <div class="dropdown ms-auto" style="flex-shrink: 0;" x-show="showActions || dropdownOpen || selected.id === node.id" x-cloak>
-                  <a href="#" class="text-decoration-none text-center small px-2 text-body" data-bs-toggle="dropdown" @click.prevent="dropdownOpen = true" @click.outside="dropdownOpen = false; showActions = false">
+                <div class="dropdown ms-auto" style="flex-shrink: 0;"
+                  x-show="showActions || dropdownOpen || selected.id === node.id" x-cloak>
+                  <a href="#" class="text-decoration-none text-center small px-2 text-body" data-bs-toggle="dropdown"
+                    @click.prevent="dropdownOpen = true" @click.outside="dropdownOpen = false; showActions = false">
                     <i class="bi bi-three-dots"></i>
                   </a>
                   <ul class="dropdown-menu dropdown-menu-end shadow-sm py-1">
                     <template x-for="action in node.actions" :key="action.name">
                       <li>
-                        <a class="dropdown-item small" :class="action.isDangerous ? 'text-danger' : ''" href="javascript:void(0)" @click.prevent="executeNodeAction(node, action); dropdownOpen = false; showActions = false;">
+                        <a class="dropdown-item small" :class="action.isDangerous ? 'text-danger' : ''"
+                          href="javascript:void(0)"
+                          @click.prevent="executeNodeAction(node, action); dropdownOpen = false; showActions = false;">
                           <i class="bi me-2" :class="action.icon"></i>
                           <span x-text="action.label"></span>
                         </a>
@@ -105,20 +134,26 @@
 
       <!-- Main Content -->
       <main class="col-md-9 ms-sm-auto col-lg-10 overflow-hidden vh-100 shadow position-relative">
-        <div x-show="entityLoading" class="p-5 position-absolute rounded start-50 text-center top-50 translate-middle" style="z-index: 9999;">
+        <div x-show="entityLoading" x-cloak
+          class="p-3 bg-body border shadow-sm position-absolute rounded start-50 text-center top-50 translate-middle"
+          style="z-index: 9999;">
           <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-          <span class="ms-2 text-muted small" x-text="selected.entity ? 'Loading ' + selected.type + ' ' + selected.entity + '...' : 'Loading...'"></span>
+          <span class="ms-2 text-muted small"
+            x-text="selected.entity ? 'Loading ' + selected.type + ' ' + selected.entity + '...' : 'Loading...'"></span>
         </div>
-        
-        <div x-show="!entityLoading && entityData" class="h-100">
+
+        <div x-show="entityData" class="h-100"
+          :style="entityLoading ? 'opacity: 0.5; pointer-events: none;' : 'transition: opacity 0.2s;'">
           <div class="d-flex flex-column small h-100">
             <!-- Query Bar -->
             <div class="bg-body-tertiary w-100 p-2 d-flex flex-shrink-0 justify-content-between align-items-center">
               <div class="flex-fill me-2">
-                <textarea class="form-control form-control-sm font-monospace" placeholder="Enter CQL query and press Cmd+Enter to execute..." rows="1" x-model="cqlQuery" @keydown.ctrl.enter="executeCQLQuery()" @keydown.meta.enter="executeCQLQuery()"></textarea>
+                <textarea class="form-control form-control-sm font-monospace"
+                  placeholder="Enter CQL query and press Cmd+Enter to execute..." rows="1" x-model="cqlQuery"
+                  @keydown.ctrl.enter="executeCQLQuery()" @keydown.meta.enter="executeCQLQuery()"></textarea>
               </div>
-              <button type="button" class="btn btn-sm btn-secondary" @click="executeCQLQuery()" :disabled="!cqlQuery || cqlQuery.trim() === ''">
-                <i class="bi bi-play-fill"></i> Execute
+              <button type="button" class="bg-body border-dark-subtle btn btn-sm fw-medium px-4 shadow-sm text-body-secondary" @click="executeCQLQuery()" :disabled="!cqlQuery || cqlQuery.trim() === ''">
+                Run <i class="bi bi-caret-right-fill"></i>
               </button>
             </div>
 
@@ -130,29 +165,22 @@
             </template>
 
             <!-- Tabulator Table Output -->
-            <div x-show="entityData && entityData.column_metadata && entityData.column_metadata.length > 0" class="flex-fill w-100 h-100 overflow-hidden" x-cloak>
-              <div id="results-table" class="h-100 w-100 table-sm table-striped table-bordered border-0"></div>
-            </div>
-
-            <!-- Pagination (Kept native as it controls server-side keyset pagination) -->
-            <div :class="entityData && entityData.rows !== undefined ? 'd-flex' : 'd-none'" class="bg-body-tertiary w-100 p-2 border-top d-flex flex-shrink-0 justify-content-between align-items-center">
-              <div>
-                Showing <span x-text="entityData && entityData.rows ? entityData.rows.length : 0"></span> rows
-                <span x-show="pagination.currentPage > 1" x-text="' (Page ' + pagination.currentPage + ')'"></span>
-              </div>
-              <div class="d-flex gap-2 align-items-center">
-                <select class="form-select form-select-sm" style="width: auto;" x-model="pageSize" @change="changePageSize()">
-                  <option value="50">50 rows</option>
-                  <option value="100">100 rows</option>
-                  <option value="200">200 rows</option>
-                </select>
-                <div class="btn-group btn-group-sm bg-body" role="group">
-                  <button type="button" class="btn btn-outline-secondary text-body-emphasis bg-body-tertiary" @click="previousPage()" :disabled="!canGoPrevious()" :class="{ 'disabled': !canGoPrevious() }">
-                    <i class="bi bi-chevron-left"></i> Previous
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary text-body-emphasis bg-body-tertiary" @click="nextPage()" :disabled="!canGoNext()" :class="{ 'disabled': !canGoNext() }">
-                    Next <i class="bi bi-chevron-right"></i>
-                  </button>
+            <div x-show="entityData && entityData.column_metadata && entityData.column_metadata.length > 0"
+              class="flex-fill w-100 h-100 overflow-hidden d-flex flex-column" x-cloak>
+              <div id="results-table"
+                class="flex-fill w-100 table-sm table-striped table-bordered border-0 custom-tabulator"></div>
+                
+              <!-- Infinite Scroll Status Bar -->
+              <div class="bg-body-tertiary w-100 p-2 border-top border-bottom-0 d-flex flex-shrink-0 justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                  <div x-show="loadedRowCount > 0">
+                    <i class="text-secondary" :class="isFetchingMore ? 'spinner-border spinner-border-sm align-middle' : (hasReachedEnd ? 'bi bi-check-circle' : 'bi bi-list')" style="width: 0.75rem; height: 0.75rem; border-width: 0.1em;" role="status"></i> 
+                    <span x-text="isFetchingMore ? 'Loading rows...' : ((hasReachedEnd ? 'Loaded all ' : 'Showing ') + loadedRowCount + ' rows')"></span>
+                  </div>
+                  <div x-show="loadedRowCount == 0">
+                    <i class="text-secondary bi bi-x-circle"></i>
+                    <span>No rows</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -161,7 +189,8 @@
 
         <!-- Connection Details Home View -->
         <template x-if="!entityData && !entityLoading">
-          <div class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
+          <div
+            class="d-flex flex-column align-items-center justify-content-center position-absolute top-50 start-50 translate-middle w-100">
             <i class="bi bi bi-database-fill fs-1 mb-3 text-secondary"></i>
             <h4 class="text-secondary text-center user-select-none">Select an item from the sidebar</h4>
             <div class="text-muted text-center small">Connection Information:
@@ -178,25 +207,28 @@
     <div class="modal fade" id="dynamic_action_modal" tabindex="-1">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content small" x-show="modalState.node">
-          
-          <form :action="modalState.action?.name === 'export' ? (modalState.node?.exportUrl || '') : 'javascript:void(0)'" 
-                :method="modalState.action?.name === 'export' ? 'POST' : 'GET'" 
-                :target="modalState.action?.name === 'export' ? '_blank' : ''"
-                @submit="modalState.action?.name !== 'export' ? handleExecuteAction($event) : closeDynamicModal()">
-            
+
+          <form
+            :action="modalState.action?.name === 'export' ? (modalState.node?.exportUrl || '') : 'javascript:void(0)'"
+            :method="modalState.action?.name === 'export' ? 'POST' : 'GET'"
+            :target="modalState.action?.name === 'export' ? '_blank' : ''"
+            @submit="modalState.action?.name !== 'export' ? handleExecuteAction($event) : closeDynamicModal()">
+
             <div class="modal-header py-2">
               <h5 class="modal-title fs-6">
                 <i class="bi me-2" :class="modalState.action?.icon"></i>
-                <span x-text="modalState.action?.title + ' ' + (modalState.node?.entity || modalState.node?.keyspace)"></span>
+                <span
+                  x-text="modalState.action?.title + ' ' + (modalState.node?.entity || modalState.node?.keyspace)"></span>
               </h5>
               <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            
+
             <div class="modal-body">
               <template x-if="modalState.action?.isDangerous">
                 <div>
-                  <p>Are you sure you want to <span class="text-lowercase" x-text="modalState.action?.label"></span> 
-                    <strong><span x-text="modalState.node?.keyspace"></span><span x-show="modalState.node?.entity" x-text="'.' + modalState.node?.entity"></span></strong>?
+                  <p>Are you sure you want to <span class="text-lowercase" x-text="modalState.action?.label"></span>
+                    <strong><span x-text="modalState.node?.keyspace"></span><span x-show="modalState.node?.entity"
+                        x-text="'.' + modalState.node?.entity"></span></strong>?
                   </p>
                   <p class="text-danger mb-0">This will permanently delete data. This cannot be undone.</p>
                 </div>
@@ -216,10 +248,12 @@
                       </div>
                       <div class="mb-3">
                         <label for="exportLimit" class="form-label">Row Limit (0 for all)</label>
-                        <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm" value="0" min="0">
+                        <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm"
+                          value="0" min="0">
                       </div>
                       <div class="form-check" x-show="modalState.node?.type === 'table'">
-                        <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL" checked>
+                        <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL"
+                          checked>
                         <label class="form-check-label" for="includeDDL">Include 'CREATE' statement</label>
                       </div>
                     </div>
@@ -228,7 +262,8 @@
                   <template x-if="modalState.node?.type === 'keyspace'">
                     <div class="alert alert-info py-2 mb-0 small">
                       <i class="bi bi-info-circle me-1"></i>
-                      This will export the entire schema for the keyspace as a CQL script. No table data will be included.
+                      This will export the entire schema for the keyspace as a CQL script. No table data will be
+                      included.
                       <input type="hidden" name="format" value="cql">
                     </div>
                   </template>
@@ -236,10 +271,11 @@
               </template>
 
             </div>
-            
+
             <div class="modal-footer p-1">
               <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
-              <button type="submit" class="btn btn-sm" :class="modalState.action?.isDangerous ? 'btn-danger' : 'btn-primary'">
+              <button type="submit" class="btn btn-sm"
+                :class="modalState.action?.isDangerous ? 'btn-danger' : 'btn-primary'">
                 <span x-text="modalState.action?.label"></span>
               </button>
             </div>
@@ -264,13 +300,17 @@
         entityLoading: false,
         schemaError: null,
         cqlQuery: '',
-        pageSize: 50,
         tabulatorInstance: null,
-        
+
+        // Status Bar Tracking
+        isFetchingMore: false,
+        loadedRowCount: 0,
+        hasReachedEnd: false,
+
         // Notifications
         toasts: [],
         visibleToasts: [],
-        
+
         // Modal State
         modalState: { node: null, action: null },
 
@@ -285,7 +325,9 @@
           type: { icon: 'bi-braces' },
           column: { icon: 'bi-layout-three-columns' }
         },
-        pagination: { currentPage: 1, pagingStates: [], hasMorePages: false },
+        
+        // Paging dictionary tracking cursor position behind the scenes
+        pagination: { pagingStates: {} },
 
         getIcon(node) {
           const lookupKey = node.type === 'group' && node.group ? node.group : node.type;
@@ -370,7 +412,7 @@
             } catch (error) {
               console.error("Failed to load children", error);
               node.isLoading = false;
-              return; 
+              return;
             }
             node.isLoading = false;
           }
@@ -402,12 +444,12 @@
           if (actionToRun === 'select') {
             cql = `SELECT * FROM ${quotedKs}.${quotedEntity}`;
           } else if (actionToRun === 'describe') {
-            cql = node.type === 'keyspace' 
-              ? `DESCRIBE KEYSPACE ${quotedKs}` 
+            cql = node.type === 'keyspace'
+              ? `DESCRIBE KEYSPACE ${quotedKs}`
               : `DESCRIBE ${node.type.toUpperCase()} ${quotedKs}.${quotedEntity}`;
           }
 
-          await this.executeCQLQuery(cql, { resetPagination, updateSelection: false });
+          this.executeCQLQuery(cql, { resetPagination });
         },
 
         // Modals & Server Actions
@@ -430,10 +472,10 @@
           if (instance) instance.hide();
         },
         async handleExecuteAction(event) {
-          event.preventDefault(); 
+          event.preventDefault();
           const { node, action } = this.modalState;
           this.closeDynamicModal();
-          
+
           try {
             await this.fetchResponse('/api/action', {
               method: 'POST',
@@ -445,10 +487,10 @@
                 entity: node.entity
               })
             });
-            
+
             if (action.name === 'drop') {
               this.goHome();
-              this.loadSchema(); 
+              this.loadSchema();
             } else if (action.name === 'truncate') {
               await this.loadEntity(node);
             }
@@ -456,131 +498,159 @@
             console.error("Action Failed", e);
           }
         },
-        renderTabulator(data) {
-          // Changed: Now only aborts if there are no columns. It allows 0 rows.
-          if (!data || !data.column_metadata || data.column_metadata.length === 0) {
-            if (this.tabulatorInstance) {
-              this.tabulatorInstance.destroy();
-              this.tabulatorInstance = null;
-            }
-            return;
-          }
-          
+
+        buildColumns(column_metadata) {
           const escapeHtml = (str) => {
             const el = document.createElement('div');
             el.textContent = str;
             return el.innerHTML;
           };
 
-          const cols = data.column_metadata.map(col => {
+          return column_metadata.map(col => {
             let iconHtml = '';
             if (col.role === 'partition_key') {
               iconHtml = '<i class="bi bi-key-fill text-body-emphasis" title="Partition Key" style="transform: rotate(-225deg); display: inline-block;"></i> ';
             } else if (col.role === 'clustering_key') {
               iconHtml = '<i class="bi bi-key text-body-emphasis" title="Clustering Key" style="transform: rotate(-225deg); display: inline-block;"></i> ';
             }
-            
+
             return {
-              // Keep escapeHtml HERE for the header titles (because titleFormatter: "html" is active)
               title: `${iconHtml}${escapeHtml(col.name)} <small class="badge bg-opacity-50 bg-secondary text-white ms-1 me-2" style="font-size: 0.7em;">${escapeHtml(col.type)}</small>`,
               field: col.name,
               titleFormatter: "html",
-              headerSort: false, 
+              headerSort: false,
               mutator: (value) => {
                 if (value === null || value === undefined) return "";
-                
-                // DO NOT escape HTML here. 
-                // Tabulator safely renders raw "<" and ">" natively.
                 return typeof value === 'object' ? JSON.stringify(value) : String(value);
               }
             };
           });
+        },
 
-          this.$nextTick(() => {
-            setTimeout(() => {
-              if (this.tabulatorInstance) {
-                this.tabulatorInstance.destroy();
+        initTabulator() {
+          this.tabulatorInstance = new Tabulator("#results-table", {
+            ajaxURL: "/api/execute",
+            progressiveLoad: "scroll",
+            progressiveLoadScrollMargin: 140,
+            paginationSize: 50,
+            layout: "fitDataStretch",
+            height: "calc(100vh - 140px)",
+            rowHeight: 28,
+            rowFormatter: function (row) {
+              row.getElement().classList.add("font-monospace", "small", "ps-0", "pe-0");
+            },
+            ajaxRequestFunc: async (url, config, params) => {
+              const page = params.page || 1;
+              const size = params.size || 50;
+              const payload = { command: this.cqlQuery, page_size: size };
+              
+              if (page > 1) {
+                const state = this.pagination.pagingStates[page - 1];
+                if (state) {
+                  payload.paging_state = state;
+                } else {
+                  return Promise.reject("Cannot jump pages");
+                }
+              }
+
+              // Update relevant loading state depending on page context
+              if (page === 1) {
+                this.entityLoading = true;
+                this.loadedRowCount = 0;
+                this.hasReachedEnd = false;
+              } else {
+                this.isFetchingMore = true;
               }
               
-              this.tabulatorInstance = new Tabulator("#results-table", {
-                data: data.rows || [], // Failsafe to ensure it passes an empty array instead of undefined
-                columns: cols,
-                layout: "fitDataStretch", 
-                maxHeight: "100%", 
-                rowHeight: 28,
-                rowFormatter: function(row) {
-                  row.getElement().classList.add("font-monospace", "small", "ps-0", "pe-0");
+              try {
+                const response = await fetch(url, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                
+                if (data.errors && data.errors.length > 0) {
+                  data.errors.forEach(err => this.showToast('CQL Error', err, 'error'));
+                  throw new Error(data.errors.join('\n'));
                 }
-              });
+                if (data.error) {
+                  this.showToast('Error', data.message || data.error, 'error');
+                  throw new Error(data.message || data.error);
+                }
 
-              this.tabulatorInstance.on("tableBuilt", () => {
-                // 1. Force redraw for the Alpine/flexbox resize bug
-                document.getElementById("results-table").querySelector(".tabulator-header").classList.add("small");
-                document.getElementById("results-table").querySelector(".tabulator-headers").classList.add("small", "p-0");
-                document.getElementById("results-table").querySelector(".tabulator-tableholder").classList.add("small");
-                this.tabulatorInstance.redraw(true);
-              });
-              
-            }, 50);
+                // Stash the state for proceeding to the NEXT page gracefully
+                if (data.has_more_pages && data.paging_state) {
+                  this.pagination.pagingStates[page] = data.paging_state;
+                } else {
+                  this.hasReachedEnd = true;
+                }
+
+                // Only update context/columns on the very first page request
+                if (page === 1) {
+                  this.entityData = { ...data, last_query: this.cqlQuery };
+                  if (data.column_metadata) {
+                    const cols = this.buildColumns(data.column_metadata);
+                    this.tabulatorInstance.setColumns(cols);
+                  }
+                }
+
+                // Append newly fetched rows to tracking counter
+                this.loadedRowCount += (data.rows || []).length;
+
+                // Mimicking traditional count-based remote payload formats that Tabulator expects
+                return {
+                  data: data.rows || [],
+                  last_page: data.has_more_pages ? page + 1 : page
+                };
+
+              } catch (e) {
+                return Promise.reject(e);
+              } finally {
+                if (page === 1) this.entityLoading = false;
+                else this.isFetchingMore = false;
+              }
+            }
+          });
+
+          this.tabulatorInstance.on("tableBuilt", () => {
+            const el = document.getElementById("results-table");
+            if(el) {
+              el.querySelector(".tabulator-header")?.classList.add("small");
+              el.querySelector(".tabulator-headers")?.classList.add("small", "p-0");
+              el.querySelector(".tabulator-tableholder")?.classList.add("small");
+              this.tabulatorInstance.redraw(true);
+            }
           });
         },
-        // CQL Execution & Pagination
-        async executeCQLQuery(cql = this.cqlQuery, { resetPagination = true, updateSelection = true } = {}) {
+
+        // Core Executor
+        executeCQLQuery(cql = this.cqlQuery, { resetPagination = true } = {}) {
           if (!cql || !cql.trim()) return;
-          this.entityLoading = true;
-          try {
-            const pagingState = resetPagination ? null : (this.pagination.currentPage === 1 ? null : this.pagination.pagingStates[this.pagination.currentPage - 2] || null);
-            const payload = { command: cql, page_size: this.pageSize };
-            if (pagingState) payload.paging_state = pagingState;
-
-            const response = await this.fetchResponse('/api/execute', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-
-            if (resetPagination) this.resetPagination();
-            
-            this.entityData = { ...response, last_query: cql };
-            this.cqlQuery = cql;
-            this.pagination.hasMorePages = response.has_more_pages || false;
-            
-            if (response.paging_state && response.has_more_pages) {
-              const index = this.pagination.currentPage - 1;
-              this.pagination.pagingStates[index] = response.paging_state;
-            }
-
-            // Sync Table rendering on success
-            this.renderTabulator(this.entityData);
-
-            return response;
-          } finally {
-            this.entityLoading = false;
+          this.cqlQuery = cql;
+          
+          if (resetPagination) {
+            this.pagination.pagingStates = {};
           }
-        },
-        
-        resetPagination() { this.pagination = { currentPage: 1, pagingStates: [], hasMorePages: false }; },
-        canGoPrevious() { return this.pagination.currentPage > 1; },
-        canGoNext() { return this.pagination.hasMorePages; },
-        async previousPage() {
-          if (!this.canGoPrevious()) return;
-          this.pagination.currentPage--;
-          if (this.entityData?.last_query) await this.executeCQLQuery(this.entityData.last_query, { resetPagination: false, updateSelection: false });
-        },
-        async nextPage() {
-          if (!this.canGoNext()) return;
-          this.pagination.currentPage++;
-          if (this.entityData?.last_query) await this.executeCQLQuery(this.entityData.last_query, { resetPagination: false, updateSelection: false });
-        },
-        async changePageSize() {
-          if (this.entityData?.last_query) await this.executeCQLQuery(this.entityData.last_query, { resetPagination: true, updateSelection: false });
+
+          if (!this.tabulatorInstance) {
+            this.initTabulator();
+          } else {
+            // Trigger a fresh data pull from page 1 
+            this.tabulatorInstance.clearData();
+            this.tabulatorInstance.setData().catch(() => {});
+          }
         },
 
         // Navigation
         goHome() {
           this.selected = { id: null };
           this.entityData = null;
-          this.resetPagination();
+          this.pagination.pagingStates = {};
+          this.loadedRowCount = 0;
+          this.hasReachedEnd = false;
+          this.isFetchingMore = false;
+          
           if (this.tabulatorInstance) {
             this.tabulatorInstance.destroy();
             this.tabulatorInstance = null;
@@ -593,4 +663,5 @@
     }
   </script>
 </body>
+
 </html>

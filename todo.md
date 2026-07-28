@@ -1,11 +1,11 @@
 1. Paging state not working [OK]
-2. Serialize complex types in UI 
+2. Serialize complex types in UI [OK]
 3. Add 'TRACING' support
 4. Add 'CONSISTENCY' support
 5. Add download/upload support (COPY)
 6. More entity support in UI
 7. (optional) Expand support
-8. 'HISTORY' support?
+8. 'HISTORY' support? [?]
 9. No-op PAGING, CLEAR, CLS, HELP command, add support for paging
 10. Serial consistency support
 11. show_host() and show_version()
@@ -28,3 +28,8 @@ INSERT INTO mykeyspace.users JSON '{
 16. When doing CREATE|TRUNCATE|INSERT|UPDATE, update UI
 17. Risky query detection
 18. Add healthcheck to init.sh to wait for cassandra DB
+19. readonly, tmpfs-only Cassandra container
+20. Add view for connecting
+21. Separate into server-side and fetched templates. No huge index.html.
+22. Tree view powered by Tabulator? Would make a lot of sense.
+23. Monaco editor (or something lighter weight) for SQL and for DESCRIBE output.
