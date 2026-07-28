@@ -33,3 +33,5 @@ INSERT INTO mykeyspace.users JSON '{
 21. Separate into server-side and fetched templates. No huge index.html.
 22. Tree view powered by Tabulator? Would make a lot of sense.
 23. Monaco editor (or something lighter weight) for SQL and for DESCRIBE output.
+24. Nice to have: skeleton loader animation for tables.
+25. Nice to have: creator UI for tables, types etc.
