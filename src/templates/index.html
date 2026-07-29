@@ -1,0 +1,541 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="main()">
+  <!-- Main Layout -->
+  <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }"
+    style="height: 100vh;">
+
+    <!-- Sidebar -->
+    <nav class="border-end col-lg-2 col-md-3 d-flex flex-column h-100 overflow-hidden position-relative sidebar vh-100">
+      <div
+        class="p-2 px-3 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
+        <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis fw-bold">Cassandra
+          Admin</a>
+        <div>
+          <button
+            @click="darkMode = darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'"
+            class="btn btn-link btn-sm float-end text-body-emphasis">
+            <i class="bi"
+              :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Search input hooked for Server-Side processing -->
+      <div class="p-2 border-bottom bg-body">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text bg-transparent border-end-0 text-muted"><i class="bi bi-search"></i></span>
+          <input type="text" id="tree-search-input" class="form-control border-start-0 ps-0"
+            placeholder="Search schema..." aria-label="Search schema">
+        </div>
+      </div>
+
+      <div x-show="loading" class="text-center position-absolute start-50 top-50 translate-middle">
+        <div class="spinner-border spinner-border-sm" role="status"></div>
+        <span class="ms-2">Loading schema...</span>
+      </div>
+
+      <!-- Tabulator Data Tree Container -->
+      <div class="overflow-y-auto flex-fill w-100" x-show="!loading" style="min-height: 0;">
+        <div id="sidebar-tree" class="w-100 h-100"></div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="col-md-9 ms-sm-auto col-lg-10 overflow-hidden vh-100 shadow position-relative">
+      <div x-show="entityLoading" x-cloak
+        class="p-3 bg-body border shadow-sm position-absolute rounded start-50 text-center top-50 translate-middle"
+        style="z-index: 9999;">
+        <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+        <span class="ms-2 text-muted small"
+          x-text="selected.entity ? 'Loading ' + selected.type + ' ' + selected.entity + '...' : 'Loading...'"></span>
+      </div>
+
+      <div x-show="entityData" class="h-100"
+        :style="entityLoading ? 'opacity: 0.5; pointer-events: none;' : 'transition: opacity 0.2s;'">
+        <div class="d-flex flex-column small h-100">
+          <!-- Query Bar -->
+          <div class="bg-body-tertiary w-100 p-2 d-flex flex-shrink-0 justify-content-between align-items-center">
+            <div class="flex-fill me-2">
+              <textarea class="form-control form-control-sm font-monospace"
+                placeholder="Enter CQL query and press Cmd+Enter to execute..." rows="1" x-model="cqlQuery"
+                @keydown.ctrl.enter="executeCQLQuery()" @keydown.meta.enter="executeCQLQuery()"></textarea>
+            </div>
+            <button type="button"
+              class="bg-body border-dark-subtle btn btn-sm fw-medium px-4 shadow-sm text-body-secondary"
+              @click="executeCQLQuery()" :disabled="!cqlQuery || cqlQuery.trim() === ''">
+              Run <i class="bi bi-caret-right-fill"></i>
+            </button>
+          </div>
+
+          <!-- Text Output -->
+          <div :class="{ 'd-block': entityData && entityData.output, 'd-none': !(entityData && entityData.output) }"
+            class="p-3 overflow-auto" style="height: calc(100vh - 100px);">
+            <pre class="bg-body-secondary p-3 rounded font-monospace small mb-0" x-text="entityData?.output"></pre>
+          </div>
+          <!-- Tabulator Table Output -->
+          <div
+            :class="{ 'd-flex': entityData && !entityData.output && entityData.column_metadata?.length > 0, 'd-none': !(entityData && !entityData.output && entityData.column_metadata?.length > 0) }"
+            class="flex-fill w-100 h-100 overflow-hidden flex-column" x-cloak>
+            <div id="results-table"
+              class="flex-fill w-100 table-sm table-striped table-bordered border-0 custom-tabulator">
+
+            </div>
+            <!-- Infinite Scroll Status Bar -->
+            <div
+              class="bg-body-tertiary w-100 p-2 border-top border-bottom-0 d-flex flex-shrink-0 justify-content-between align-items-center">
+              <div class="d-flex align-items-center">
+                <div x-show="loadedRowCount > 0">
+                  <i class="text-secondary"
+                    :class="isFetchingMore ? 'spinner-border spinner-border-sm align-middle' : (hasReachedEnd ? 'bi bi-check-circle' : 'bi bi-list')"
+                    style="width: 0.75rem; height: 0.75rem; border-width: 0.1em;" role="status"></i>
+                  <span
+                    x-text="isFetchingMore ? 'Loading rows...' : ((hasReachedEnd ? 'Loaded all ' : 'Showing ') + loadedRowCount + ' rows')"></span>
+                </div>
+                <div x-show="loadedRowCount == 0">
+                  <i class="text-secondary bi bi-x-circle"></i>
+                  <span>No rows</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% include "partials/home.html" %}
+    </main>
+  </div>
+
+  {% include "partials/modals.html" %}
+  {% include "partials/toasts.html" %}
+  {% include "partials/error_state.html" %}
+</div>
+<script>
+  function main() {
+    return {
+      // Core State
+      schema: [],
+      selected: { id: null },
+      connection: null,
+      entityData: null,
+      loading: true,
+      entityLoading: false,
+      schemaError: null,
+      cqlQuery: '',
+      tabulatorInstance: null,
+      treeTabulator: null,
+
+      // Status Bar Tracking
+      isFetchingMore: false,
+      loadedRowCount: 0,
+      hasReachedEnd: false,
+
+      // Notifications
+      toasts: [],
+      visibleToasts: [],
+
+      // Modal State
+      modalState: { node: null, action: null },
+
+      // Definitions
+      entityTypes: {
+        keyspace: { icon: 'bi-database-fill' },
+        group: { icon: '' },
+        table: { icon: 'bi-table' },
+        view: { icon: 'bi-eye' },
+        trigger: { icon: 'bi-lightning-charge' },
+        function: { icon: 'bi-code-slash' },
+        type: { icon: 'bi-braces' },
+        column: { icon: 'bi-layout-three-columns' }
+      },
+
+      pagination: { pagingStates: {} },
+
+      // Shared Utilities
+      getIcon(node) {
+        const lookupKey = node.type === 'group' && node.group ? node.group : node.type;
+        return this.entityTypes[lookupKey]?.icon || 'bi-record-circle';
+      },
+      escapeHtml(str) {
+        const el = document.createElement('div');
+        el.textContent = str;
+        return el.innerHTML;
+      },
+      needsQuoting(name) { return !/^[a-z_][a-z0-9_]*$/.test(name); },
+      quoteIdentIfNeeded(name) { return this.needsQuoting(name) ? `"${name.replace(/"/g, '""')}"` : name; },
+
+      // Toast Management
+      showToast(title, message, type = 'info', duration = 5000) {
+        const id = Date.now();
+        this.toasts.push({ id, title, message, type });
+        this.visibleToasts.push({ id, title, message, type });
+        setTimeout(() => this.removeToast(id), duration);
+      },
+      removeToast(id) {
+        this.visibleToasts = this.visibleToasts.filter(toast => toast.id !== id);
+      },
+
+      async fetchResponse(url, options = {}) {
+        const response = await fetch(url, options);
+        const data = await response.json();
+        if (Array.isArray(data.errors) && data.errors.length > 0) {
+          data.errors.forEach(err => this.showToast('CQL Error', err, 'error'));
+          throw new Error(data.errors.join('\n'));
+        }
+        if (data.error) {
+          this.showToast('Error', data.message || data.error, 'error');
+          throw new Error(data.message || data.error);
+        }
+        if (data.success && data.message) {
+          this.showToast('Success', data.message, 'success');
+        }
+        return data;
+      },
+
+      // Sidebar Tree Logic
+      async loadSchema() {
+        try {
+          const response = await this.fetchResponse('/api/schema');
+          this.schema = response.schema || [];
+          this.connection = response.connection;
+          this.loading = false;
+          this.$nextTick(() => this.initSchemaTree());
+        } catch (error) {
+          this.schemaError = error.message;
+          this.loading = false;
+        }
+      },
+
+      rowDepth(row) {
+        let depth = 0, parent = row.getTreeParent();
+        while (parent) { depth++; parent = parent.getTreeParent(); }
+        return depth;
+      },
+
+      reformatAllTreeRows() {
+        if (!this.treeTabulator) return;
+        const reformatRecursive = (rows) => {
+          rows.forEach(r => {
+            r.reformat();
+            const children = r.getTreeChildren();
+            if (children?.length) reformatRecursive(children);
+          });
+        };
+        reformatRecursive(this.treeTabulator.getRows());
+      },
+
+      // 1. Streamlined Tree Tabulator Initialization
+      initSchemaTree() {
+        const self = this;
+        const INDENT_PX = 16;
+
+        this.treeTabulator = new Tabulator("#sidebar-tree", {
+          data: this.schema,
+          layout: "fitData",
+          headerVisible: false,
+          dataTree: true,
+          dataTreeStartExpanded: false,
+          dataTreeChildField: "_children",
+          dataTreeChildIndent: 0,
+          dataTreeBranchElement: "<span></span>",
+          dataTreeExpandElement: "<span></span>",
+          dataTreeCollapseElement: "<span></span>",
+          height: "100%",
+          width: 120,
+          rowFormatter: (row) => {
+            const d = row.getData();
+            // Highlight if this row's ID matches the currently selected entity
+            const isSelected = Boolean(self.selected && self.selected.id === d.id);
+            row.getElement().classList.toggle("row-selected", isSelected);
+          },
+          rowContextMenu: (e, row) => {
+            const actions = row.getData().actions;
+            if (!actions?.length) return [];
+            return actions.map(action => ({
+              label: `<i class='bi ${action.icon || "bi-gear"} me-2 ${action.isDangerous ? "text-danger" : ""}'></i><span class="${action.isDangerous ? "text-danger" : ""}">${action.label}</span>`,
+              action: () => self.executeNodeAction(row.getData(), action)
+            }));
+          },
+          columns: [{
+            title: "Name",
+            field: "label",
+            widthGrow: 1,
+            width: 320,
+            headerSort: false,
+            resizable: false,
+            formatter: (cell) => {
+              const row = cell.getRow();
+              const d = row.getData();
+              const depth = self.rowDepth(row);
+
+              let caretHtml = `<i class="bi tree-caret spacer"></i>`;
+              if (d.isLoading) {
+                caretHtml = `<div class="spinner-border text-secondary me-1" style="width: 0.7rem; height: 0.7rem; border-width: 0.12em;" role="status"></div>`;
+              } else if (d.hasChildren) {
+                caretHtml = `<i class="bi bi-caret-right-fill tree-caret${row.isTreeExpanded() ? " expanded" : ""}"></i>`;
+              }
+
+              const labelStyle = d.type === 'group' ? 'text-muted' : '';
+              return `<span class="name-cell" style="padding-left: ${depth * INDENT_PX}px">${caretHtml}<i class="bi ${self.getIcon(d)}"></i><span class="text-truncate ${labelStyle}" title="${d.label}">${d.label}</span></span>`;
+            }
+          }]
+        });
+
+        this.treeTabulator.on("tableBuilt", () => requestAnimationFrame(() => self.treeTabulator.redraw(true)));
+        this.treeTabulator.on("rowClick", (e, row) => this.handleNodeClick(row));
+        this.treeTabulator.on("dataTreeRowExpanded", (row) => row.reformat());
+        this.treeTabulator.on("dataTreeRowCollapsed", (row) => row.reformat());
+
+        const searchInput = document.getElementById("tree-search-input");
+        if (searchInput) {
+          let debounceTimer;
+          searchInput.addEventListener("input", (e) => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => this.searchSchemaServerSide(e.target.value.trim()), 300);
+          });
+        }
+      },
+
+      async handleNodeClick(row) {
+        const node = row.getData();
+        if (!node.isClickable && !node.hasChildren) return;
+
+        if (node.isClickable && node.defaultClickAction !== 'expand') {
+          this.selected = { id: node.id, ...node };
+        }
+        this.reformatAllTreeRows();
+
+        if (node.defaultClickAction === 'expand') {
+          if (node.hasChildren) await this.toggleNode(row);
+          return;
+        }
+
+        if (node.isClickable && node.defaultClickAction) {
+          await this.loadEntity(node);
+        } else if (node.hasChildren) {
+          await this.toggleNode(row);
+        }
+      },
+
+      async toggleNode(row) {
+        const node = row.getData();
+        if (row.isTreeExpanded()) {
+          row.treeCollapse();
+          return;
+        }
+
+        if (node.hasChildren && !node.childrenLoaded) {
+          node.isLoading = true;
+          row.reformat();
+          try {
+            const params = new URLSearchParams({
+              type: node.type || '',
+              keyspace: node.keyspace || '',
+              group: node.group || '',
+              entity: node.entity || ''
+            });
+            const response = await this.fetchResponse(`/api/schema/children?${params.toString()}`);
+            node.childrenLoaded = true;
+            await row.update({ _children: response.children || [], childrenLoaded: true, isLoading: false });
+          } catch (error) {
+            console.error("Failed to load children", error);
+          } finally {
+            node.isLoading = false;
+            row.reformat();
+          }
+        }
+        row.treeExpand();
+      },
+
+      async searchSchemaServerSide(query) {
+        if (!this.treeTabulator) return;
+        if (query === "") {
+          this.treeTabulator.setData(this.schema);
+          return;
+        }
+        console.log("Server-side search hook triggered with query:", query);
+      },
+
+      // Entity Loading & CQL
+      async loadEntity(node, resetPagination = true, forceAction = null) {
+        const actionToRun = forceAction || node.defaultClickAction;
+        if (!actionToRun || actionToRun === 'expand') return;
+
+        const quotedKs = this.quoteIdentIfNeeded(node.keyspace);
+        const quotedEntity = node.entity ? this.quoteIdentIfNeeded(node.entity) : null;
+        let cql;
+
+        if (actionToRun === 'select') {
+          cql = `SELECT * FROM ${quotedKs}.${quotedEntity}`;
+        } else if (actionToRun === 'describe') {
+          cql = node.type === 'keyspace'
+            ? `DESCRIBE KEYSPACE ${quotedKs}`
+            : `DESCRIBE ${node.type.toUpperCase()} ${quotedKs}.${quotedEntity}`;
+        }
+
+        this.executeCQLQuery(cql, { resetPagination });
+      },
+
+      executeNodeAction(node, action) {
+        // Mark the right-clicked entity as active/selected immediately
+        this.selected = { id: node.id, ...node };
+        this.reformatAllTreeRows();
+
+        if (action.name === 'describe') {
+          this.loadEntity(node, true, 'describe');
+        } else if (action.name === 'select') {
+          this.loadEntity(node, true, 'select');
+        } else {
+          this.openModal(node, action);
+        }
+      },
+
+      openModal(node, action) {
+        this.modalState = { node, action };
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('dynamic_action_modal')).show();
+      },
+      closeDynamicModal() {
+        bootstrap.Modal.getInstance(document.getElementById('dynamic_action_modal'))?.hide();
+      },
+      async handleExecuteAction(event) {
+        event.preventDefault();
+        const { node, action } = this.modalState;
+        this.closeDynamicModal();
+
+        try {
+          await this.fetchResponse('/api/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: action.name,
+              keyspace: node.keyspace,
+              type: node.type,
+              entity: node.entity
+            })
+          });
+          if (action.name === 'drop') {
+            this.goHome();
+            this.loadSchema();
+          } else if (action.name === 'truncate') {
+            await this.loadEntity(node);
+          }
+        } catch (e) {
+          console.error("Action Failed", e);
+        }
+      },
+
+      buildColumns(column_metadata) {
+        return column_metadata.map(col => {
+          let iconHtml = '';
+          if (col.role === 'partition_key') {
+            iconHtml = '<i class="bi bi-key-fill text-body-emphasis" title="Partition Key" style="transform: rotate(-225deg); display: inline-block;"></i> ';
+          } else if (col.role === 'clustering_key') {
+            iconHtml = '<i class="bi bi-key text-body-emphasis" title="Clustering Key" style="transform: rotate(-225deg); display: inline-block;"></i> ';
+          }
+
+          return {
+            title: `${iconHtml}${this.escapeHtml(col.name)} <small class="badge bg-opacity-50 bg-secondary text-white ms-1 me-2" style="font-size: 0.7em;">${this.escapeHtml(col.type)}</small>`,
+            field: col.name,
+            titleFormatter: "html",
+            headerSort: false,
+            mutator: (value) => (value === null || value === undefined) ? "" : (typeof value === 'object' ? JSON.stringify(value) : String(value))
+          };
+        });
+      },
+
+      // 2. Streamlined Results Grid Initialization
+      initMainTable() {
+        this.tabulatorInstance = new Tabulator("#results-table", {
+          ajaxURL: "/api/execute",
+          progressiveLoad: "scroll",
+          progressiveLoadScrollMargin: 140,
+          paginationSize: 50,
+          layout: "fitDataStretch",
+          columnHeaderVertAlign: "center",
+          height: "calc(100vh - 140px)",
+          rowHeight: 28,
+          rowFormatter: (row) => row.getElement().classList.add("font-monospace", "small", "ps-0", "pe-0"),
+          ajaxRequestFunc: async (url, config, params) => {
+            const page = params.page || 1;
+            const size = params.size || 50;
+            const payload = { command: this.cqlQuery, page_size: size };
+
+            if (page > 1) {
+              const state = this.pagination.pagingStates[page - 1];
+              if (!state) return Promise.reject("Cannot jump pages");
+              payload.paging_state = state;
+            } else {
+              this.entityLoading = true;
+              this.loadedRowCount = 0;
+              this.hasReachedEnd = false;
+            }
+
+            this.isFetchingMore = page > 1;
+
+            try {
+              const data = await this.fetchResponse(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+
+              if (data.has_more_pages && data.paging_state) {
+                this.pagination.pagingStates[page] = data.paging_state;
+              } else {
+                this.hasReachedEnd = true;
+              }
+
+              if (page === 1) {
+                this.entityData = { ...data, last_query: this.cqlQuery };
+                if (data.column_metadata) {
+                  this.tabulatorInstance.setColumns(this.buildColumns(data.column_metadata));
+                }
+                this.$nextTick(() => this.tabulatorInstance?.redraw(true));
+              }
+
+              this.loadedRowCount += (data.rows || []).length;
+              return { data: data.rows || [], last_page: data.has_more_pages ? page + 1 : page };
+            } finally {
+              if (page === 1) this.entityLoading = false;
+              else this.isFetchingMore = false;
+            }
+          }
+        });
+      },
+
+      executeCQLQuery(cql = this.cqlQuery, { resetPagination = true } = {}) {
+        if (!cql?.trim()) return;
+        this.cqlQuery = cql;
+
+        if (resetPagination) this.pagination.pagingStates = {};
+
+        if (!this.tabulatorInstance) {
+          this.initMainTable();
+        } else {
+          this.tabulatorInstance.clearData();
+          this.tabulatorInstance.setData().catch(() => { });
+        }
+      },
+
+      goHome() {
+        this.selected = { id: null };
+        this.entityData = null;
+        this.pagination.pagingStates = {};
+        this.loadedRowCount = 0;
+        this.hasReachedEnd = false;
+        this.isFetchingMore = false;
+
+        this.reformatAllTreeRows();
+
+        if (this.tabulatorInstance) {
+          this.tabulatorInstance.destroy();
+          this.tabulatorInstance = null;
+        }
+      },
+
+      init() {
+        this.loadSchema();
+      }
+    };
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,81 @@
+
+<!-- SCHEMA-DRIVEN DYNAMIC MODAL -->
+<div class="modal fade" id="dynamic_action_modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content small" x-show="modalState.node">
+
+      <form :action="modalState.action?.name === 'export' ? (modalState.node?.exportUrl || '') : 'javascript:void(0)'"
+        :method="modalState.action?.name === 'export' ? 'POST' : 'GET'"
+        :target="modalState.action?.name === 'export' ? '_blank' : ''"
+        @submit="modalState.action?.name !== 'export' ? handleExecuteAction($event) : closeDynamicModal()">
+
+        <div class="modal-header py-2">
+          <h5 class="modal-title fs-6">
+            <i class="bi me-2" :class="modalState.action?.icon"></i>
+            <span
+              x-text="modalState.action?.title + ' ' + (modalState.node?.entity || modalState.node?.keyspace)"></span>
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+
+        <div class="modal-body">
+          <template x-if="modalState.action?.isDangerous">
+            <div>
+              <p>Are you sure you want to <span class="text-lowercase" x-text="modalState.action?.label"></span>
+                <strong><span x-text="modalState.node?.keyspace"></span><span x-show="modalState.node?.entity"
+                    x-text="'.' + modalState.node?.entity"></span></strong>?
+              </p>
+              <p class="text-danger mb-0">This will permanently delete data. This cannot be undone.</p>
+            </div>
+          </template>
+
+          <template x-if="modalState.action?.name === 'export'">
+            <div>
+              <template x-if="modalState.node?.type !== 'keyspace'">
+                <div>
+                  <div class="mb-3">
+                    <label for="exportFormat" class="form-label">Format</label>
+                    <select id="exportFormat" name="format" class="form-select form-select-sm">
+                      <option value="csv">CSV</option>
+                      <option value="json">JSON</option>
+                      <option value="cql" x-show="modalState.node?.type === 'table'">CQL</option>
+                    </select>
+                  </div>
+                  <div class="mb-3">
+                    <label for="exportLimit" class="form-label">Row Limit (0 for all)</label>
+                    <input type="number" id="exportLimit" name="limit" class="form-control form-control-sm" value="0"
+                      min="0">
+                  </div>
+                  <div class="form-check" x-show="modalState.node?.type === 'table'">
+                    <input class="form-check-input" type="checkbox" value="1" name="include_ddl" id="includeDDL"
+                      checked>
+                    <label class="form-check-label" for="includeDDL">Include 'CREATE' statement</label>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="modalState.node?.type === 'keyspace'">
+                <div class="alert alert-info py-2 mb-0 small">
+                  <i class="bi bi-info-circle me-1"></i>
+                  This will export the entire schema for the keyspace as a CQL script. No table data will be
+                  included.
+                  <input type="hidden" name="format" value="cql">
+                </div>
+              </template>
+            </div>
+          </template>
+
+        </div>
+
+        <div class="modal-footer p-1">
+          <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-sm"
+            :class="modalState.action?.isDangerous ? 'btn-danger' : 'btn-primary'">
+            <span x-text="modalState.action?.label"></span>
+          </button>
+        </div>
+      </form>
+
+    </div>
+  </div>
+</div>

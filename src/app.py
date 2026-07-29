@@ -7,7 +7,7 @@ import traceback
 from functools import wraps
 from io import StringIO
 
-from flask import Flask, Response, request, send_from_directory
+from flask import Flask, Response, request, send_from_directory, render_template
 
 sys.path.insert(0, "/opt/cassandra/pylib")
 from cqlshlib.cqlshmain import Shell
@@ -406,7 +406,7 @@ def resolve_type_fields(ks_meta, args):
 
 @app.route("/")
 def root():
-    return send_from_directory(".", "index.html")
+  return render_template("index.html", auto_connect=AUTO_CONNECT)
 
 if not AUTO_CONNECT:
     @app.route("/api/connect", methods=["POST"])
