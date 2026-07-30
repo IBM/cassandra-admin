@@ -2,19 +2,20 @@
 {% block content %}
 <div x-data="main()">
   <!-- Main Layout -->
-  <div class="row g-0 d-none" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }"
-    style="height: 100vh;">
-
+  <div class="row g-0 d-none vh-100" x-show="!schemaError" :class="{ 'd-flex': !schemaError, 'd-none': schemaError }">
     <!-- Sidebar -->
     <nav class="border-end col-lg-2 col-md-3 d-flex flex-column h-100 overflow-hidden position-relative sidebar vh-100">
       <div
         class="p-2 px-3 bg-body-tertiary border-bottom position-sticky top-0 z-2 mb-0 d-flex justify-content-between align-items-center">
         <a href="/" @click.prevent="goHome()" class="text-decoration-none text-body-emphasis fw-bold">Cassandra
           Admin</a>
-        <div>
+        <div class="d-flex align-items-center gap-1">
+          <button @click="collapseAllNodes()" class="btn btn-link btn-sm text-body-emphasis p-1" title="Collapse All">
+            <i class="bi bi-arrows-angle-contract"></i>
+          </button>
           <button
             @click="darkMode = darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'"
-            class="btn btn-link btn-sm float-end text-body-emphasis">
+            class="btn btn-link btn-sm text-body-emphasis p-1" title="Toggle Theme">
             <i class="bi"
               :class="darkMode === 'dark' || (darkMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'bi-sun-fill' : 'bi-moon-fill'"></i>
           </button>
@@ -36,7 +37,7 @@
       </div>
 
       <!-- Tabulator Data Tree Container -->
-      <div class="overflow-y-auto flex-fill w-100" x-show="!loading" style="min-height: 0;">
+      <div class="overflow-y-auto flex-fill w-100" x-show="!loading">
         <div id="sidebar-tree" class="w-100 h-100"></div>
       </div>
     </nav>
@@ -44,15 +45,13 @@
     <!-- Main Content -->
     <main class="col-md-9 ms-sm-auto col-lg-10 overflow-hidden vh-100 shadow position-relative">
       <div x-show="entityLoading" x-cloak
-        class="p-3 bg-body border shadow-sm position-absolute rounded start-50 text-center top-50 translate-middle"
-        style="z-index: 9999;">
+        class="p-3 bg-body border shadow-sm position-absolute rounded start-50 text-center top-50 translate-middle z-3">
         <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
         <span class="ms-2 text-muted small"
           x-text="selected.entity ? 'Loading ' + selected.type + ' ' + selected.entity + '...' : 'Loading...'"></span>
       </div>
 
-      <div x-show="entityData" class="h-100"
-        :style="entityLoading ? 'opacity: 0.5; pointer-events: none;' : 'transition: opacity 0.2s;'">
+      <div x-show="entityData" class="h-100 fade" :class="entityLoading ? 'pe-none' : 'show'">
         <div class="d-flex flex-column small h-100">
           <!-- Query Bar -->
           <div class="bg-body-tertiary w-100 p-2 d-flex flex-shrink-0 justify-content-between align-items-center">
@@ -223,7 +222,20 @@
         reformatRecursive(this.treeTabulator.getRows());
       },
 
-      // 1. Streamlined Tree Tabulator Initialization
+      collapseAllNodes() {
+        if (!this.treeTabulator) return;
+        const collapseRecursive = (rows) => {
+          rows.forEach(row => {
+            if (row.isTreeExpanded()) {
+              row.treeCollapse();
+            }
+            const children = row.getTreeChildren();
+            if (children?.length) collapseRecursive(children);
+          });
+        };
+        collapseRecursive(this.treeTabulator.getRows());
+      },
+
       initSchemaTree() {
         const self = this;
         const INDENT_PX = 16;
